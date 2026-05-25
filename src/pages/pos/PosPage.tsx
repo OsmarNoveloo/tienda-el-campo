@@ -384,7 +384,7 @@ export default function PosPage() {
     }
 
     if (tipoCobro === 'CREDITO') {
-      const { error: creditoError } = await supabase.from('credito_ventas').insert([
+      const { error: creditoError } = await supabase.from('creditos_ventas').insert([
         {
           venta_id: ventaRow.id,
           cliente_id: Number(clienteCreditoId),

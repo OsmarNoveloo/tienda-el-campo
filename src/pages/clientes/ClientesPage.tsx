@@ -1,5 +1,5 @@
 import { Users, Plus, Pencil, AlertCircle, ChevronDown, DollarSign, Search } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -64,7 +64,7 @@ export default function ClientesPage() {
       const clientesConDeuda: ClienteRow[] = []
       for (const cliente of (data ?? [])) {
         const { data: creditos, error: credErr } = await supabase
-          .from('credito_ventas')
+          .from('creditos_ventas')
           .select('saldo_pendiente')
           .eq('cliente_id', cliente.id)
           .neq('estado', 'PAGADO')
@@ -91,7 +91,7 @@ export default function ClientesPage() {
   const loadDeudasCliente = useCallback(async (clienteId: number) => {
     try {
       const { data: creditos, error: credErr } = await supabase
-        .from('credito_ventas')
+        .from('creditos_ventas')
         .select('id, venta_id, cliente_id, usuario_id, fecha_credito, total_credito, saldo_pendiente, estado')
         .eq('cliente_id', clienteId)
         .neq('estado', 'PAGADO')
@@ -296,7 +296,7 @@ export default function ClientesPage() {
                 const deudas = deudasMap.get(cliente.id) ?? []
                 const isExpanded = expandedClienteId === cliente.id
                 return (
-                  <tbody key={cliente.id}>
+                  <Fragment key={cliente.id}>
                     <tr className="hover:bg-gray-50 transition-colors">
                       <td className="px-5 py-3">
                         {cliente.total_deuda > 0 && (
@@ -383,7 +383,7 @@ export default function ClientesPage() {
                         </td>
                       </tr>
                     )}
-                  </tbody>
+                  </Fragment>
                 )
               })}
             </tbody>

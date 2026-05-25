@@ -132,10 +132,34 @@ export function useCaja() {
     }
 
     const montoApertura = caja?.monto_apertura ?? 0
-    const totalEffectivo = payload.total_efectivo
+    const totalEfectivo = payload.total_efectivo
     const totalTarjeta = payload.total_tarjeta
+    const totalVentas = Number(totalEfectivo) + Number(totalTarjeta)
+    const efectivoEsperado = Number(montoApertura) + Number(totalEfectivo)
 
-    // Crear corte (si es necesario)
+    const { error: corteErr } = await supabase.from('cortes_caja').insert([
+      {
+        caja_sesion_id: cajaId,
+        usuario_id: payload.empleado_cierre_id,
+        fecha_corte: getLocalISOString(),
+        total_ventas: Number(totalVentas.toFixed(2)),
+        total_efectivo: Number(totalEfectivo.toFixed(2)),
+        total_tarjeta: Number(totalTarjeta.toFixed(2)),
+        total_entradas: 0,
+        total_salidas: 0,
+        efectivo_esperado: Number(efectivoEsperado.toFixed(2)),
+        efectivo_contado: Number(efectivoEsperado.toFixed(2)),
+        diferencia: 0,
+        observacion: payload.observaciones ?? null,
+      },
+    ])
+
+    if (corteErr) {
+      setError(corteErr.message)
+      setLoading(false)
+      throw new Error(corteErr.message)
+    }
+
     // Actualizar caja_sesion con cierre
     const { error: updateErr } = await supabase
       .from('caja_sesiones')

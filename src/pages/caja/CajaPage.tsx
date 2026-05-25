@@ -31,7 +31,7 @@ export default function CajaPage() {
   const [usuarios, setUsuarios] = useState<Usuario[]>([])
   const [usuarioActual, setUsuarioActual] = useState<Usuario | null>(null)
 
-  const { cajaActual, cortes, loading, error, abrirCaja, cerrarCaja } = useCaja()
+  const { cajaActual, cortes, loading, error, abrirCaja, cerrarCaja, refetch } = useCaja()
 
   const {
     register: registerAbrir,
@@ -87,6 +87,12 @@ export default function CajaPage() {
     loadUsuarios()
     loadUsuarioActual()
   }, [loadUsuarios, loadUsuarioActual])
+
+  useEffect(() => {
+    if (tab === 'historial') {
+      void refetch()
+    }
+  }, [tab, refetch])
 
   const submitAbrir = async (values: AbrirOutput) => {
     try {
