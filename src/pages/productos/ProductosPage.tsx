@@ -52,16 +52,16 @@ export default function ProductosPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
           <Package className="text-indigo-600" size={24} />
           <h1 className="text-2xl font-bold text-gray-800">Productos</h1>
         </div>
         <button
           onClick={abrirNuevo}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
         >
           <Plus size={16} />
           Nuevo producto
@@ -86,7 +86,8 @@ export default function ProductosPage() {
             <p className="text-gray-400 text-sm">No hay productos registrados</p>
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
                 <th className="text-left px-5 py-3 font-semibold text-gray-600">Nombre</th>
@@ -135,7 +136,8 @@ export default function ProductosPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </div>
         )}
       </div>
 

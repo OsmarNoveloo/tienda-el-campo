@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
+import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { useCaja } from '../../hooks/useCaja'
 import type { Usuario } from '../../types/database'
@@ -25,11 +26,11 @@ type CerrarInput = z.input<typeof cerrarSchema>
 type CerrarOutput = z.output<typeof cerrarSchema>
 
 export default function CajaPage() {
+  const { user } = useAuth()
   const [tab, setTab] = useState<'actual' | 'historial'>('actual')
   const [modalAbrirOpen, setModalAbrirOpen] = useState(false)
   const [modalCerrarOpen, setModalCerrarOpen] = useState(false)
   const [usuarios, setUsuarios] = useState<Usuario[]>([])
-  const [usuarioActual, setUsuarioActual] = useState<Usuario | null>(null)
 
   const { cajaActual, cortes, loading, error, abrirCaja, cerrarCaja, refetch } = useCaja()
 
@@ -67,26 +68,9 @@ export default function CajaPage() {
     setUsuarios((data ?? []) as Usuario[])
   }, [])
 
-  const loadUsuarioActual = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('estado', 'ACTIVO')
-      .order('id')
-      .limit(1)
-      .maybeSingle()
-
-    if (error) {
-      toast.error(error.message)
-      return
-    }
-    setUsuarioActual(data as Usuario | null)
-  }, [])
-
   useEffect(() => {
     loadUsuarios()
-    loadUsuarioActual()
-  }, [loadUsuarios, loadUsuarioActual])
+  }, [loadUsuarios])
 
   useEffect(() => {
     if (tab === 'historial') {
@@ -115,8 +99,13 @@ export default function CajaPage() {
     }
 
     try {
+      if (!user) {
+        toast.error('No hay sesión activa')
+        return
+      }
+
       await cerrarCaja(cajaActual.id, {
-        empleado_cierre_id: usuarioActual?.id ?? 0,
+        empleado_cierre_id: user.id,
         total_efectivo: values.total_efectivo,
         total_tarjeta: values.total_tarjeta,
         observaciones: values.observacion,
@@ -130,24 +119,24 @@ export default function CajaPage() {
   }
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-4 md:p-6 space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
           <Banknote className="text-indigo-600" size={24} />
           <h1 className="text-2xl font-bold text-gray-800">Caja</h1>
         </div>
-        <div className="flex gap-2">
+        <div className="flex w-full sm:w-auto gap-2">
           {!cajaActual ? (
             <button
               onClick={() => setModalAbrirOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700"
+              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700"
             >
               <Plus size={16} /> Abrir caja
             </button>
           ) : (
             <button
               onClick={() => setModalCerrarOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700"
+              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700"
             >
               <Lock size={16} /> Cerrar caja
             </button>
@@ -201,7 +190,7 @@ export default function CajaPage() {
         </div>
       )}
 
-      <div className="flex gap-2 border-b border-gray-200">
+      <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
         <button
           onClick={() => setTab('actual')}
           className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
@@ -266,7 +255,8 @@ export default function CajaPage() {
           {loading ? (
             <div className="p-10 text-center text-sm text-gray-400">Cargando historial...</div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">ID</th>
@@ -300,7 +290,8 @@ export default function CajaPage() {
                   </tr>
                 )}
               </tbody>
-            </table>
+              </table>
+            </div>
           )}
         </div>
       )}

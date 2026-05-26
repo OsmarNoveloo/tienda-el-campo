@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle } from 'lucide-react'
 import { toast } from 'react-toastify'
+import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { getLocalISOString } from '../../lib/dateUtils'
+import { useSystemConfig } from '../../hooks/useSystemConfig'
 import type { Producto } from '../../types/database'
 
 type CartItem = {
   producto: Producto
   cantidad: number
+  isQuickItem?: boolean
+  quickCode?: string
 }
 
 type DailySummary = {
@@ -46,8 +50,23 @@ function generateFolio() {
   return `VTA-${YYYY}${MM}${DD}-${hh}${mm}${ss}`
 }
 
+function generateBaseQuickCode() {
+  const now = new Date()
+  const pad = (value: number) => value.toString().padStart(2, '0')
+  const YYYY = now.getFullYear()
+  const MM = pad(now.getMonth() + 1)
+  const DD = pad(now.getDate())
+  const hh = pad(now.getHours())
+  const mm = pad(now.getMinutes())
+  const ss = pad(now.getSeconds())
+  const rand = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
+  return `POS-${YYYY}${MM}${DD}${hh}${mm}${ss}-${rand}`
+}
+
 export default function PosPage() {
-  const SUMMARY_POLL_MS = 20000
+  const { user } = useAuth()
+  const { config } = useSystemConfig()
+  const SUMMARY_POLL_MS = config.posSummaryRefreshSeconds * 1000
 
   const [productos, setProductos] = useState<Producto[]>([])
   const [carrito, setCarrito] = useState<CartItem[]>([])
@@ -55,11 +74,11 @@ export default function PosPage() {
   const [loading, setLoading] = useState(false)
   const [procesandoVenta, setProcesandoVenta] = useState(false)
   const [haciendoCorte, setHaciendoCorte] = useState(false)
+  const [productoRapidoPrecio, setProductoRapidoPrecio] = useState('')
   const [summary, setSummary] = useState<DailySummary>(initialSummary)
   const [clientes, setClientes] = useState<ClienteCreditoOption[]>([])
   const [tipoCobro, setTipoCobro] = useState<'CONTADO' | 'CREDITO'>('CONTADO')
   const [clienteCreditoId, setClienteCreditoId] = useState<number | ''>('')
-  const [usuarioId, setUsuarioId] = useState<number | null>(null)
   const [cajaAbierta, setCajaAbierta] = useState<{ id: number; monto_apertura: number } | null>(null)
   const [cajaLoading, setCajaLoading] = useState(true)
   const cajaRequestInFlight = useRef(false)
@@ -95,26 +114,6 @@ export default function PosPage() {
     if (error) toast.error(error.message)
     setProductos(data ?? [])
     setLoading(false)
-  }, [])
-
-  const loadUsuario = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('id')
-      .eq('estado', 'ACTIVO')
-      .order('id')
-      .limit(1)
-      .maybeSingle()
-
-    if (error) {
-      toast.error(`No se pudo obtener usuario: ${error.message}`)
-      return
-    }
-    if (!data) {
-      toast.error('No hay usuarios activos. Crea un usuario para vender.')
-      return
-    }
-    setUsuarioId(data.id)
   }, [])
 
   const loadClientes = useCallback(async () => {
@@ -219,7 +218,6 @@ export default function PosPage() {
 
   // Inicializar al montar el componente
   useEffect(() => {
-    loadUsuario()
     loadClientes()
     loadProductos()
     verificarCajaAbierta(true)
@@ -234,18 +232,18 @@ export default function PosPage() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'caja_sesiones' },
         () => {
-          if (document.hidden) return
+          if (config.pauseRefreshOnHiddenTab && document.hidden) return
           void verificarCajaAbierta(false)
         },
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED' && !document.hidden) {
+        if (status === 'SUBSCRIBED' && (!config.pauseRefreshOnHiddenTab || !document.hidden)) {
           void verificarCajaAbierta(false)
         }
       })
 
     const handleVisibilityChange = () => {
-      if (document.hidden) return
+      if (config.pauseRefreshOnHiddenTab && document.hidden) return
       void verificarCajaAbierta(false)
     }
 
@@ -255,17 +253,18 @@ export default function PosPage() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       void supabase.removeChannel(channel)
     }
-  }, [verificarCajaAbierta])
+  }, [config.pauseRefreshOnHiddenTab, verificarCajaAbierta])
+  
 
   // Refrescar resumen periódicamente solo en pestaña visible
   useEffect(() => {
     const interval = setInterval(() => {
-      if (document.hidden) return
+      if (config.pauseRefreshOnHiddenTab && document.hidden) return
       loadSummary()
     }, SUMMARY_POLL_MS)
 
     return () => clearInterval(interval)
-  }, [loadSummary])
+  }, [SUMMARY_POLL_MS, config.pauseRefreshOnHiddenTab, loadSummary])
 
   const addToCart = (producto: Producto) => {
     setCarrito((prev) => {
@@ -277,8 +276,43 @@ export default function PosPage() {
             : item,
         )
       }
+
       return [...prev, { producto, cantidad: 1 }]
     })
+  }
+
+  const addQuickItemToCart = () => {
+    const precio = Number(productoRapidoPrecio)
+
+    if (!Number.isFinite(precio) || precio <= 0) {
+      toast.error('Ingresa un precio mayor a 0')
+      return
+    }
+
+    const quickCode = generateBaseQuickCode()
+    const quickProduct: Producto = {
+      id: -Date.now(),
+      nombre: 'Adicional',
+      descripcion: `Código ${quickCode}`,
+      codigo_barras: quickCode,
+      sku: quickCode,
+      costo_actual: 0,
+      precio_actual: Number(precio.toFixed(2)),
+      stock_minimo: 0,
+      activo: true,
+      creado_en: getLocalISOString(),
+      actualizado_en: null,
+      categoria_id: null,
+      proveedor_id: null,
+      unidad_medida_id: null,
+    }
+
+    setCarrito((prev) => [
+      ...prev,
+      { producto: quickProduct, cantidad: 1, isQuickItem: true, quickCode },
+    ])
+    setProductoRapidoPrecio('')
+    toast.success('Adicional agregado al carrito')
   }
 
   const changeQty = (productoId: number, delta: number) => {
@@ -298,8 +332,8 @@ export default function PosPage() {
   }
 
   const finalizarVenta = async () => {
-    if (!usuarioId) {
-      toast.error('No hay usuario activo para registrar la venta.')
+    if (!user) {
+      toast.error('No hay sesión activa para registrar la venta.')
       return
     }
     if (!cajaAbierta) {
@@ -325,7 +359,7 @@ export default function PosPage() {
       .insert([
         {
           caja_sesion_id: cajaAbierta.id,
-          usuario_id: usuarioId,
+          usuario_id: user.id,
           folio,
           subtotal: total,
           descuento: 0,
@@ -345,7 +379,9 @@ export default function PosPage() {
       return
     }
 
-    const detallePayload = carrito.map((item) => {
+    const regularItems = carrito.filter((item) => !item.isQuickItem)
+
+    const detallePayload = regularItems.map((item) => {
       const precio = Number(item.producto.precio_actual)
       const cantidad = Number(item.cantidad)
       const lineSubtotal = Number((precio * cantidad).toFixed(2))
@@ -360,16 +396,18 @@ export default function PosPage() {
       }
     })
 
-    const { error: detalleError } = await supabase.from('venta_detalle').insert(detallePayload)
-    if (detalleError) {
-      toast.error(`Venta creada, pero fallo detalle: ${detalleError.message}`)
-      setProcesandoVenta(false)
-      return
+    if (detallePayload.length > 0) {
+      const { error: detalleError } = await supabase.from('venta_detalle').insert(detallePayload)
+      if (detalleError) {
+        toast.error(`Venta creada, pero fallo detalle: ${detalleError.message}`)
+        setProcesandoVenta(false)
+        return
+      }
     }
 
-    const movimientosPayload = carrito.map((item) => ({
+    const movimientosPayload = regularItems.map((item) => ({
       producto_id: item.producto.id,
-      usuario_id: usuarioId,
+      usuario_id: user.id,
       tipo: 'SALIDA' as const,
       cantidad: Number(item.cantidad),
       costo_unitario: Number(item.producto.costo_actual),
@@ -378,9 +416,11 @@ export default function PosPage() {
       observacion: `Salida por venta ${folio}`,
       fecha_movimiento: getLocalISOString(),
     }))
-    const { error: movimientoError } = await supabase.from('inventario_movimientos').insert(movimientosPayload)
-    if (movimientoError) {
-      toast.warning(`Venta guardada, pero no se registro movimiento: ${movimientoError.message}`)
+    if (movimientosPayload.length > 0) {
+      const { error: movimientoError } = await supabase.from('inventario_movimientos').insert(movimientosPayload)
+      if (movimientoError) {
+        toast.warning(`Venta guardada, pero no se registro movimiento: ${movimientoError.message}`)
+      }
     }
 
     if (tipoCobro === 'CREDITO') {
@@ -388,7 +428,7 @@ export default function PosPage() {
         {
           venta_id: ventaRow.id,
           cliente_id: Number(clienteCreditoId),
-          usuario_id: usuarioId,
+          usuario_id: user.id,
           fecha_credito: getLocalISOString(),
           total_credito: total,
           saldo_pendiente: total,
@@ -400,6 +440,18 @@ export default function PosPage() {
       if (creditoError) {
         toast.warning(`Venta guardada, pero no se registro crédito: ${creditoError.message}`)
       }
+    }
+
+    const quickItems = carrito.filter((item) => item.isQuickItem)
+    if (quickItems.length > 0) {
+      const currentObservation = tipoCobro === 'CREDITO' ? 'Venta registrada a crédito desde POS' : null
+      const quickText = `Adicionales: ${quickItems
+        .map((item) => `${item.quickCode ?? 'SIN-CODIGO'}:$${(Number(item.producto.precio_actual) * Number(item.cantidad)).toFixed(2)}`)
+        .join(', ')}`
+      await supabase
+        .from('ventas')
+        .update({ observacion: currentObservation ? `${currentObservation} | ${quickText}` : quickText })
+        .eq('id', ventaRow.id)
     }
 
     setCarrito([])
@@ -415,8 +467,8 @@ export default function PosPage() {
   }
 
   const hacerCorte = async () => {
-    if (!usuarioId) {
-      toast.error('No hay usuario activo para hacer corte.')
+    if (!user) {
+      toast.error('No hay sesión activa para hacer corte.')
       return
     }
 
@@ -431,7 +483,7 @@ export default function PosPage() {
     const { error: corteError } = await supabase.from('cortes_caja').insert([
       {
         caja_sesion_id: cajaAbierta.id,
-        usuario_id: usuarioId,
+        usuario_id: user.id,
         total_ventas: Number(summary.montoHoy.toFixed(2)),
         total_efectivo: Number(summary.montoHoy.toFixed(2)),
         total_tarjeta: 0,
@@ -455,7 +507,7 @@ export default function PosPage() {
       .update({
         estado: 'CERRADA',
         fecha_cierre: getLocalISOString(),
-        empleado_cierre_id: usuarioId,
+        empleado_cierre_id: user.id,
       })
       .eq('id', cajaAbierta.id)
 
@@ -472,8 +524,8 @@ export default function PosPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-4 md:p-6 space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
           <ShoppingCart className="text-indigo-600" size={24} />
           <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
@@ -481,7 +533,7 @@ export default function PosPage() {
         <button
           onClick={hacerCorte}
           disabled={haciendoCorte || !cajaAbierta}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
           title={!cajaAbierta ? 'Abre una caja para hacer corte' : ''}
         >
           <Wallet size={16} />
@@ -523,14 +575,49 @@ export default function PosPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <section className="xl:col-span-2 bg-white rounded-xl border border-gray-100 overflow-hidden">
           <div className="p-4 border-b border-gray-100">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar por nombre, SKU o codigo de barras"
-                className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
+            <div className="flex flex-col gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar por nombre, SKU o codigo de barras"
+                  className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px_auto] gap-2">
+                <div className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-500 bg-gray-50 flex items-center">
+                  Adicional
+                </div>
+                <input
+                  value={productoRapidoPrecio}
+                  onChange={(event) => setProductoRapidoPrecio(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === 'Escape' || event.key === 'Esc') {
+                      event.preventDefault()
+                      addQuickItemToCart()
+                    }
+                  }}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Precio"
+                />
+                <button
+                  type="button"
+                  onClick={addQuickItemToCart}
+                  className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  <Plus size={14} />
+                  Agregar rápido
+                </button>
+              </div>
+
+              <p className="text-xs text-gray-500">
+                Solo ingresa el precio y presiona agregar. Se genera un código interno único para la venta.
+              </p>
             </div>
           </div>
 
@@ -539,12 +626,12 @@ export default function PosPage() {
           ) : (
             <div className="max-h-140 overflow-auto divide-y divide-gray-50">
               {productosFiltrados.map((producto) => (
-                <div key={producto.id} className="p-4 flex items-center justify-between gap-3">
+                <div key={producto.id} className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div>
                     <p className="font-medium text-gray-800">{producto.nombre}</p>
                     <p className="text-xs text-gray-500">SKU: {producto.sku ?? 'N/A'} | Codigo: {producto.codigo_barras ?? 'N/A'}</p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-3">
                     <p className="font-semibold text-gray-800">${Number(producto.precio_actual).toFixed(2)}</p>
                     <button
                       onClick={() => addToCart(producto)}
@@ -665,6 +752,7 @@ export default function PosPage() {
           </div>
         </section>
       </div>
+
     </div>
   )
 }

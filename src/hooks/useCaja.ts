@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getLocalISOString } from '../lib/dateUtils'
 import { supabase } from '../lib/supabaseClient'
+import { useSystemConfig } from './useSystemConfig'
 import type { CajaSesion, CorteCaja } from '../types/database'
 
 export type CajaSesionRow = CajaSesion & {
@@ -12,6 +13,7 @@ export type CorteCajaRow = CorteCaja & {
 }
 
 export function useCaja() {
+  const { config } = useSystemConfig()
   const [cajaActual, setCajaActual] = useState<CajaSesionRow | null>(null)
   const [cortes, setCortes] = useState<CorteCajaRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -55,7 +57,7 @@ export function useCaja() {
       .from('cortes_caja')
       .select('*')
       .order('id', { ascending: false })
-      .limit(200)
+      .limit(config.cajaHistorialLimit)
 
     if (err) {
       setError(err.message)
@@ -84,7 +86,7 @@ export function useCaja() {
     }))
 
     setCortes(mapped)
-  }, [])
+  }, [config.cajaHistorialLimit])
 
   const abrirCaja = async (payload: {
     empleado_apertura_id: number

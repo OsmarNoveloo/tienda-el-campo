@@ -18,6 +18,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
+import { useAuth } from '../../context/AuthContext'
+import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { supabase } from '../../lib/supabaseClient'
 import { getLocalISOString } from '../../lib/dateUtils'
 import type { AbonoCredito, CreditoVenta, EstadoCredito } from '../../types/database'
@@ -70,10 +72,11 @@ function getEstadoLabel(estado: CreditoEstadoNormalizado, saldo: number) {
 }
 
 export default function CreditosPage() {
+  const { user } = useAuth()
+  const { config } = useSystemConfig()
   const [creditos, setCreditos] = useState<CreditoRow[]>([])
   const [loading, setLoading] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
-  const [usuarioId, setUsuarioId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterEstado, setFilterEstado] = useState<'TODOS' | CreditoEstadoNormalizado>('TODOS')
@@ -94,23 +97,6 @@ export default function CreditosPage() {
       observacion: '',
     },
   })
-
-  const loadUsuarioActivo = useCallback(async () => {
-    const { data, error: err } = await supabase
-      .from('usuarios')
-      .select('id')
-      .eq('estado', 'ACTIVO')
-      .order('id')
-      .limit(1)
-      .maybeSingle()
-
-    if (err) {
-      toast.error(`No se pudo obtener el usuario activo: ${err.message}`)
-      return
-    }
-
-    setUsuarioId(data?.id ?? null)
-  }, [])
 
   const loadCreditos = useCallback(async () => {
     const shouldShowLoading = creditos.length === 0
@@ -218,18 +204,19 @@ export default function CreditosPage() {
   }, [creditos.length])
 
   useEffect(() => {
-    void loadUsuarioActivo()
     void loadCreditos()
-  }, [loadUsuarioActivo, loadCreditos])
+  }, [loadCreditos])
 
   useEffect(() => {
+    const refreshMs = config.creditosRefreshSeconds * 1000
+
     const interval = setInterval(() => {
-      if (document.hidden) return
+      if (config.pauseRefreshOnHiddenTab && document.hidden) return
       void loadCreditos()
-    }, 30000)
+    }, refreshMs)
 
     return () => clearInterval(interval)
-  }, [loadCreditos])
+  }, [config.creditosRefreshSeconds, config.pauseRefreshOnHiddenTab, loadCreditos])
 
   const filteredCreditos = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -279,8 +266,8 @@ export default function CreditosPage() {
       return
     }
 
-    if (!usuarioId) {
-      toast.error('No hay usuario activo para registrar el abono')
+    if (!user) {
+      toast.error('No hay sesión activa para registrar el abono')
       return
     }
 
@@ -304,7 +291,7 @@ export default function CreditosPage() {
     const { error: abonoErr } = await supabase.from('abonos_credito').insert([
       {
         credito_id: selectedCredito.id,
-        usuario_id: usuarioId,
+        usuario_id: user.id,
         monto: Number(montoFinal.toFixed(2)),
         fecha_abono: getLocalISOString(),
         metodo_pago_id: null,
@@ -355,7 +342,7 @@ export default function CreditosPage() {
   }, [lastUpdatedAt])
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-3 sm:p-4 md:p-6 space-y-5">
       <div className="rounded-2xl border border-gray-100 bg-white px-5 py-4 shadow-sm">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
@@ -382,7 +369,7 @@ export default function CreditosPage() {
             <Clock3 size={12} />
             {lastUpdatedLabel}
           </span>
-          <span className="text-gray-400">El historial se refresca automáticamente cada 30 segundos.</span>
+          <span className="text-gray-400">El historial se refresca automáticamente cada {config.creditosRefreshSeconds} segundos.</span>
         </div>
       </div>
 
@@ -454,8 +441,8 @@ export default function CreditosPage() {
             <p className="text-sm text-gray-400">No hay créditos para mostrar.</p>
           </div>
         ) : (
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px] text-sm">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
                   <th className="w-8 px-4 py-3"></th>
@@ -538,7 +525,7 @@ export default function CreditosPage() {
                                   </div>
                                 </div>
 
-                                <div className="mt-4 grid gap-3 md:grid-cols-4 text-xs">
+                                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-xs">
                                   <div className="rounded-lg bg-gray-50 p-3">
                                     <p className="text-gray-500">Total crédito</p>
                                     <p className="mt-1 text-sm font-semibold text-gray-800">{formatMoney(Number(credito.total_credito))}</p>

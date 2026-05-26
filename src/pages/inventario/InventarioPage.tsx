@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
+import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { useInventario } from '../../hooks/useInventario'
 import type { TipoMovimiento, Producto } from '../../types/database'
@@ -21,10 +22,10 @@ type FormInput = z.input<typeof schema>
 type FormOutput = z.output<typeof schema>
 
 export default function InventarioPage() {
+  const { user } = useAuth()
   const [tab, setTab] = useState<'movimientos' | 'stock'>('movimientos')
   const [modalOpen, setModalOpen] = useState(false)
   const [productos, setProductos] = useState<Producto[]>([])
-  const [usuarioId, setUsuarioId] = useState<number | null>(null)
   const [stock, setStock] = useState<StockProducto[]>([])
   const [stockLoading, setStockLoading] = useState(false)
 
@@ -55,26 +56,9 @@ export default function InventarioPage() {
     setProductos((data ?? []) as Producto[])
   }, [])
 
-  const loadUsuario = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('id')
-      .eq('estado', 'ACTIVO')
-      .order('id')
-      .limit(1)
-      .maybeSingle()
-
-    if (error || !data) {
-      toast.error('No hay usuario activo')
-      return
-    }
-    setUsuarioId(data.id)
-  }, [])
-
   useEffect(() => {
     loadProductos()
-    loadUsuario()
-  }, [loadProductos, loadUsuario])
+  }, [loadProductos])
 
   useEffect(() => {
     if (tab === 'stock') {
@@ -90,15 +74,15 @@ export default function InventarioPage() {
   }, [tab, loadStockActual])
 
   const submitForm = async (values: FormOutput) => {
-    if (!usuarioId) {
-      toast.error('No hay usuario activo')
+    if (!user) {
+      toast.error('No hay sesión activa')
       return
     }
 
     try {
       await crearMovimiento({
         producto_id: values.producto_id,
-        usuario_id: usuarioId,
+        usuario_id: user.id,
         tipo: values.tipo as TipoMovimiento,
         cantidad: values.cantidad,
         costo_unitario: values.costo_unitario ?? null,
@@ -120,15 +104,15 @@ export default function InventarioPage() {
   )
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-4 md:p-6 space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
           <Warehouse className="text-indigo-600" size={24} />
           <h1 className="text-2xl font-bold text-gray-800">Inventario</h1>
         </div>
         <button
           onClick={() => setModalOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
         >
           <Plus size={16} /> Registrar movimiento
         </button>
@@ -141,7 +125,7 @@ export default function InventarioPage() {
         </div>
       )}
 
-      <div className="flex gap-2 border-b border-gray-200">
+      <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
         <button
           onClick={() => setTab('movimientos')}
           className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
@@ -169,7 +153,8 @@ export default function InventarioPage() {
           {loading ? (
             <div className="p-10 text-center text-sm text-gray-400">Cargando movimientos...</div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[860px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Producto</th>
@@ -205,7 +190,8 @@ export default function InventarioPage() {
                   </tr>
                 )}
               </tbody>
-            </table>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -228,7 +214,8 @@ export default function InventarioPage() {
             {stockLoading ? (
               <div className="p-10 text-center text-sm text-gray-400">Cargando stock...</div>
             ) : (
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold text-gray-600">Producto</th>
@@ -267,7 +254,8 @@ export default function InventarioPage() {
                     </tr>
                   )}
                 </tbody>
-              </table>
+                </table>
+              </div>
             )}
           </div>
         </div>

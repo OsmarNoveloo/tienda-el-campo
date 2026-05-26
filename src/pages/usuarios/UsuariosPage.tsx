@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
+import { sha256Hex } from '../../lib/security'
 import { supabase } from '../../lib/supabaseClient'
 
 type RolOption = {
@@ -38,13 +39,6 @@ type FormInput = z.input<typeof schema>
 type FormOutput = z.output<typeof schema>
 
 type EditingUser = Pick<UsuarioRow, 'id' | 'rol_id' | 'nombre' | 'usuario' | 'telefono' | 'email' | 'estado'>
-
-async function hashPassword(raw: string) {
-  const encoded = new TextEncoder().encode(raw)
-  const digest = await crypto.subtle.digest('SHA-256', encoded)
-  const bytes = Array.from(new Uint8Array(digest))
-  return bytes.map((b) => b.toString(16).padStart(2, '0')).join('')
-}
 
 export default function UsuariosPage() {
   const [usuarios, setUsuarios] = useState<UsuarioRow[]>([])
@@ -168,7 +162,7 @@ export default function UsuariosPage() {
       }
 
       if (values.password && values.password.trim()) {
-        updatePayload.password_hash = await hashPassword(values.password)
+        updatePayload.password_hash = await sha256Hex(values.password)
       }
 
       const { error } = await supabase.from('usuarios').update(updatePayload).eq('id', editing.id)
@@ -189,7 +183,7 @@ export default function UsuariosPage() {
       return
     }
 
-    const password_hash = await hashPassword(values.password)
+    const password_hash = await sha256Hex(values.password)
     const { error } = await supabase.from('usuarios').insert([
       {
         rol_id: values.rol_id,
@@ -225,15 +219,15 @@ export default function UsuariosPage() {
   }
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-4 md:p-6 space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
           <ShieldUser className="text-indigo-600" size={24} />
           <h1 className="text-2xl font-bold text-gray-800">Panel de Usuarios</h1>
         </div>
         <button
           onClick={openCreate}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
         >
           <Plus size={16} /> Nuevo usuario
         </button>
@@ -243,7 +237,8 @@ export default function UsuariosPage() {
         {loading ? (
           <div className="p-10 text-center text-sm text-gray-400">Cargando usuarios...</div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[780px] text-sm">
             <thead className="bg-gray-50 border-b border-gray-100 text-gray-600">
               <tr>
                 <th className="text-left px-4 py-3 font-semibold">Nombre</th>
@@ -292,13 +287,14 @@ export default function UsuariosPage() {
                 </tr>
               )}
             </tbody>
-          </table>
+            </table>
+          </div>
         )}
       </div>
 
       {modalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-xl bg-white rounded-2xl shadow-xl overflow-hidden">
+          <div className="w-full max-w-xl max-h-[90vh] bg-white rounded-2xl shadow-xl overflow-y-auto">
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-800">{editing ? 'Editar usuario' : 'Nuevo usuario'}</h2>
               <button onClick={() => setModalOpen(false)} className="text-gray-400 hover:text-gray-600">

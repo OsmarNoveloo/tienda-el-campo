@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getLocalISOString } from '../lib/dateUtils'
 import { supabase } from '../lib/supabaseClient'
+import { useSystemConfig } from './useSystemConfig'
 
 export type DashboardStats = {
   ventasHoy: number
@@ -18,6 +19,7 @@ export type UltimaVenta = {
 }
 
 export function useDashboard() {
+  const { config } = useSystemConfig()
   const [stats, setStats] = useState<DashboardStats>({
     ventasHoy: 0,
     ingresoHoy: 0,
@@ -33,28 +35,9 @@ export function useDashboard() {
     setError(null)
 
     try {
-
-      // Obtener fecha de inicio del día en formato local con offset
-      function getLocalISOString(date = new Date()) {
-        const pad = (n: number) => n.toString().padStart(2, '0');
-        const year = date.getFullYear();
-        const month = pad(date.getMonth() + 1);
-        const day = pad(date.getDate());
-        const hour = pad(date.getHours());
-        const min = pad(date.getMinutes());
-        const sec = pad(date.getSeconds());
-        const ms = date.getMilliseconds();
-        const offsetMin = date.getTimezoneOffset();
-        const absOffsetMin = Math.abs(offsetMin);
-        const offsetSign = offsetMin > 0 ? '-' : '+';
-        const offsetHour = pad(Math.floor(absOffsetMin / 60));
-        const offsetMinute = pad(absOffsetMin % 60);
-        const msStr = ms > 0 ? '.' + ms.toString().padStart(3, '0') : '';
-        return `${year}-${month}-${day}T${hour}:${min}:${sec}${msStr}${offsetSign}${offsetHour}:${offsetMinute}`;
-      }
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayISO = getLocalISOString(today);
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const todayISO = getLocalISOString(today)
 
       // 1. Ventas y ingresos del día
       const { data: ventasData, error: ventasError } = await supabase
@@ -178,14 +161,16 @@ export function useDashboard() {
     loadStats()
     loadUltimasVentas()
 
-    // Refrescar cada 30 segundos
+    const refreshMs = config.dashboardRefreshSeconds * 1000
+
     const interval = setInterval(() => {
+      if (config.pauseRefreshOnHiddenTab && document.hidden) return
       loadStats()
       loadUltimasVentas()
-    }, 30000)
+    }, refreshMs)
 
     return () => clearInterval(interval)
-  }, [loadStats, loadUltimasVentas])
+  }, [config.dashboardRefreshSeconds, config.pauseRefreshOnHiddenTab, loadStats, loadUltimasVentas])
 
   return {
     stats,

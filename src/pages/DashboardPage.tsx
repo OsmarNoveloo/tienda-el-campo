@@ -1,7 +1,9 @@
 import { LayoutDashboard, ShoppingCart, Receipt, TrendingUp, AlertCircle } from 'lucide-react'
 import { useDashboard } from '../hooks/useDashboard'
+import { useSystemConfig } from '../hooks/useSystemConfig'
 
 export default function DashboardPage() {
+  const { config } = useSystemConfig()
   const { stats, ultimasVentas, loading, error } = useDashboard()
 
   const statCards = [
@@ -12,7 +14,7 @@ export default function DashboardPage() {
   ]
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-4 md:p-6 space-y-6">
       <div className="flex items-center gap-3">
         <LayoutDashboard className="text-indigo-600" size={24} />
         <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
@@ -73,7 +75,7 @@ export default function DashboardPage() {
           <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
             <h2 className="text-base font-semibold text-gray-800">Información del sistema</h2>
           </div>
-          <div className="p-6 space-y-4 text-sm">
+          <div className="p-4 sm:p-6 space-y-4 text-sm">
             <div>
               <p className="text-gray-500 mb-2">Estado</p>
               <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-medium">
@@ -91,7 +93,7 @@ export default function DashboardPage() {
             </div>
             <div className="pt-2 border-t border-gray-100">
               <p className="text-gray-600 text-xs">
-                Los datos se actualizan cada 30 segundos automáticamente. Para refrescar manualmente, recarga la página.
+                Los datos se actualizan cada {config.dashboardRefreshSeconds} segundos. Para refrescar manualmente, recarga la página.
               </p>
             </div>
           </div>

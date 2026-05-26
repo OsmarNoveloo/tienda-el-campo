@@ -61,6 +61,56 @@
 
 body {
   margin: 0;
+  background-color: var(--app-bg, #f3f4f6);
+  color: var(--app-text, #111827);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+:root {
+  --app-bg: #f3f4f6;
+  --app-surface: #ffffff;
+  --app-surface-alt: #f9fafb;
+  --app-border: #e5e7eb;
+  --app-text: #111827;
+  --app-text-muted: #6b7280;
+}
+
+html[data-theme='dark'] {
+  --app-bg: #0f172a;
+  --app-surface: #111827;
+  --app-surface-alt: #1f2937;
+  --app-border: #334155;
+  --app-text: #f3f4f6;
+  --app-text-muted: #9ca3af;
+}
+
+html[data-theme='dark'] .bg-gray-100,
+html[data-theme='dark'] .bg-gray-50 {
+  background-color: var(--app-bg);
+}
+
+html[data-theme='dark'] .bg-white {
+  background-color: var(--app-surface);
+}
+
+html[data-theme='dark'] .border-gray-50,
+html[data-theme='dark'] .border-gray-100,
+html[data-theme='dark'] .border-gray-200,
+html[data-theme='dark'] .border-gray-300 {
+  border-color: var(--app-border);
+}
+
+html[data-theme='dark'] .text-gray-900,
+html[data-theme='dark'] .text-gray-800,
+html[data-theme='dark'] .text-gray-700 {
+  color: var(--app-text);
+}
+
+html[data-theme='dark'] .text-gray-600,
+html[data-theme='dark'] .text-gray-500,
+html[data-theme='dark'] .text-gray-400,
+html[data-theme='dark'] .text-gray-300 {
+  color: var(--app-text-muted);
 }
 
 h1,

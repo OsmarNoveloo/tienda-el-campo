@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getLocalISOString } from '../lib/dateUtils'
 import { supabase } from '../lib/supabaseClient'
+import { useSystemConfig } from './useSystemConfig'
 import type { TipoMovimiento } from '../types/database'
 
 export type MovimientoRow = {
@@ -27,6 +28,7 @@ export type StockProducto = {
 }
 
 export function useInventario() {
+  const { config } = useSystemConfig()
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -51,7 +53,7 @@ export function useInventario() {
         usuarios(nombre)
       `)
       .order('fecha_movimiento', { ascending: false })
-      .limit(500)
+      .limit(config.inventarioMovimientosLimit)
 
     if (error) {
       setError(error.message)
@@ -76,7 +78,7 @@ export function useInventario() {
 
     setMovimientos(mapped)
     setLoading(false)
-  }, [])
+  }, [config.inventarioMovimientosLimit])
 
   const crearMovimiento = async (payload: {
     producto_id: number
