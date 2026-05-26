@@ -154,7 +154,7 @@ export default function InventarioPage() {
             <div className="p-10 text-center text-sm text-gray-400">Cargando movimientos...</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] text-sm">
+              <table className="w-full min-w-215 text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Producto</th>
@@ -215,7 +215,7 @@ export default function InventarioPage() {
               <div className="p-10 text-center text-sm text-gray-400">Cargando stock...</div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-sm">
+                <table className="w-full min-w-190 text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
                     <th className="text-left px-4 py-3 font-semibold text-gray-600">Producto</th>

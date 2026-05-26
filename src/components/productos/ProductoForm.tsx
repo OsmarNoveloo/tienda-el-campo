@@ -1,8 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useForm, type SubmitHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { X } from 'lucide-react'
+import { Camera, ImagePlus, X } from 'lucide-react'
+import { toast } from 'react-toastify'
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import type { Producto } from '../../types/database'
 
 const schema = z.object({
@@ -16,6 +18,19 @@ const schema = z.object({
   activo: z.boolean(),
 })
 
+const SCANNER_REGION_ID = 'producto-barcode-scanner-region'
+const FILE_SCANNER_REGION_ID = 'producto-barcode-file-scan-region'
+const SUPPORTED_FORMATS = [
+  Html5QrcodeSupportedFormats.EAN_13,
+  Html5QrcodeSupportedFormats.EAN_8,
+  Html5QrcodeSupportedFormats.UPC_A,
+  Html5QrcodeSupportedFormats.UPC_E,
+  Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.ITF,
+  Html5QrcodeSupportedFormats.QR_CODE,
+]
+
 type FormValues = z.input<typeof schema>
 type FormOutput = z.output<typeof schema>
 
@@ -27,7 +42,7 @@ interface Props {
 
 export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
   "use no memo"
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<FormValues, unknown, FormOutput>({
+  const { register, handleSubmit, reset, setValue, getValues, formState: { errors, isSubmitting } } = useForm<FormValues, unknown, FormOutput>({
     resolver: zodResolver(schema),
     defaultValues: {
       nombre: '',
@@ -40,6 +55,11 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
       activo: true,
     },
   })
+
+  const [scannerOpen, setScannerOpen] = useState(false)
+  const [scannerError, setScannerError] = useState<string | null>(null)
+  const scannerRef = useRef<Html5Qrcode | null>(null)
+  const scannerActiveRef = useRef(false)
 
   useEffect(() => {
     if (producto) {
@@ -59,6 +79,186 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
   const handleFormSubmit: SubmitHandler<FormOutput> = async (values) => {
     await onSubmit(values)
   }
+
+  const stopScanner = async () => {
+    if (scannerRef.current && scannerActiveRef.current) {
+      try {
+        await scannerRef.current.stop()
+      } catch {
+        // Ignore stop errors.
+      }
+      try {
+        await scannerRef.current.clear()
+      } catch {
+        // Ignore clear errors.
+      }
+      scannerActiveRef.current = false
+    }
+    scannerRef.current = null
+  }
+
+  const applyDetectedCode = (rawCode: string) => {
+    const code = rawCode.trim()
+    if (!code) return
+
+    setValue('codigo_barras', code, { shouldDirty: true, shouldValidate: true })
+    if (!getValues('sku')?.trim()) {
+      setValue('sku', code, { shouldDirty: true, shouldValidate: true })
+    }
+    toast.success('Código detectado y autollenado')
+  }
+
+  const getScannerErrorMessage = (error: unknown) => {
+    const message = error instanceof Error ? error.message : 'No se pudo iniciar la cámara.'
+    const normalized = message.toLowerCase()
+
+    if (normalized.includes('notallowed') || normalized.includes('permission')) {
+      return 'Permiso de cámara denegado. Habilítalo en el navegador e intenta de nuevo.'
+    }
+    if (normalized.includes('notfound') || normalized.includes('devicesnotfound')) {
+      return 'No se encontró cámara disponible en este dispositivo.'
+    }
+    if (normalized.includes('insecure') || normalized.includes('https')) {
+      return 'La cámara requiere HTTPS o localhost para funcionar.'
+    }
+
+    return message
+  }
+
+  const ensureHiddenScanContainer = (id: string) => {
+    let node = document.getElementById(id)
+    if (!node) {
+      node = document.createElement('div')
+      node.id = id
+      node.style.display = 'none'
+      document.body.appendChild(node)
+    }
+    return node
+  }
+
+  const openScanner = () => {
+    setScannerError(null)
+    setScannerOpen(true)
+  }
+
+  const closeScanner = () => {
+    setScannerOpen(false)
+  }
+
+  const handleImageCapture: React.ChangeEventHandler<HTMLInputElement> = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      ensureHiddenScanContainer(FILE_SCANNER_REGION_ID)
+      const scanner = new Html5Qrcode(FILE_SCANNER_REGION_ID, {
+        formatsToSupport: SUPPORTED_FORMATS,
+        verbose: false,
+      })
+      const decodedText = await scanner.scanFile(file, true)
+      applyDetectedCode(decodedText)
+      await scanner.clear()
+    } catch (error) {
+      const message = getScannerErrorMessage(error)
+      toast.error(message)
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  useEffect(() => {
+    if (!scannerOpen) return
+
+    let cancelled = false
+
+    const startScanner = async () => {
+      setScannerError(null)
+
+      // Espera un tick para asegurar que el contenedor exista en el DOM.
+      await new Promise<void>((resolve) => {
+        window.setTimeout(() => resolve(), 0)
+      })
+
+      if (cancelled) return
+
+      const region = document.getElementById(SCANNER_REGION_ID)
+      if (!region) {
+        setScannerError('No se pudo preparar el lector de cámara.')
+        return
+      }
+
+      try {
+        const scanner = new Html5Qrcode(SCANNER_REGION_ID, {
+          formatsToSupport: SUPPORTED_FORMATS,
+          verbose: false,
+        })
+        scannerRef.current = scanner
+
+        await scanner.start(
+          { facingMode: { exact: 'environment' } },
+          { fps: 10, qrbox: { width: 280, height: 160 } },
+          (decodedText) => {
+            applyDetectedCode(decodedText)
+            void stopScanner()
+            setScannerOpen(false)
+          },
+          () => {
+            // Ignore continuous not-found callbacks.
+          },
+        )
+
+        if (cancelled) {
+          await stopScanner()
+          return
+        }
+
+        scannerActiveRef.current = true
+      } catch (error) {
+        try {
+          const scanner = new Html5Qrcode(SCANNER_REGION_ID, {
+            formatsToSupport: SUPPORTED_FORMATS,
+            verbose: false,
+          })
+          scannerRef.current = scanner
+
+          await scanner.start(
+            { facingMode: 'environment' },
+            { fps: 10, qrbox: { width: 280, height: 160 } },
+            (decodedText) => {
+              applyDetectedCode(decodedText)
+              void stopScanner()
+              setScannerOpen(false)
+            },
+            () => {
+              // Ignore continuous not-found callbacks.
+            },
+          )
+
+          if (cancelled) {
+            await stopScanner()
+            return
+          }
+
+          scannerActiveRef.current = true
+        } catch (fallbackError) {
+          setScannerError(getScannerErrorMessage(fallbackError))
+        }
+      }
+    }
+
+    void startScanner()
+
+    return () => {
+      cancelled = true
+      void stopScanner()
+    }
+  }, [scannerOpen])
+
+  useEffect(() => {
+    return () => {
+      void stopScanner()
+    }
+  }, [])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -87,14 +287,40 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
           </div>
 
           {/* Código de barras y SKU */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Código de barras</label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label className="block text-sm font-medium text-gray-700">Código de barras</label>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={openScanner}
+                    className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:border-indigo-200 hover:text-indigo-600"
+                  >
+                    <Camera size={13} />
+                    Cámara
+                  </button>
+                  <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:border-indigo-200 hover:text-indigo-600">
+                    <ImagePlus size={13} />
+                    Foto
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={handleImageCapture}
+                    />
+                  </label>
+                </div>
+              </div>
               <input
                 {...register('codigo_barras')}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="0000000000000"
               />
+              <p className="mt-1 text-[11px] text-gray-500">
+                Puedes escanear en vivo o cargar una foto para detectar código y autollenar.
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">SKU</label>
@@ -180,6 +406,35 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
             </button>
           </div>
         </form>
+
+        {scannerOpen && (
+          <div className="fixed inset-0 z-60 bg-black/70 p-4 flex items-center justify-center">
+            <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-xl">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-800">Escanear código</h3>
+                <button
+                  type="button"
+                  onClick={closeScanner}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="rounded-lg overflow-hidden border border-gray-200 bg-black">
+                <div id={SCANNER_REGION_ID} className="w-full h-64" />
+              </div>
+
+              {scannerError && (
+                <p className="mt-2 text-xs text-rose-600">{scannerError}</p>
+              )}
+
+              <p className="mt-2 text-xs text-gray-500">
+                Apunta la cámara al código de barras. Se completará automáticamente al detectarlo.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

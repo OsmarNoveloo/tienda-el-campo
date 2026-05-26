@@ -238,7 +238,7 @@ export default function UsuariosPage() {
           <div className="p-10 text-center text-sm text-gray-400">Cargando usuarios...</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[780px] text-sm">
+            <table className="w-full min-w-195 text-sm">
             <thead className="bg-gray-50 border-b border-gray-100 text-gray-600">
               <tr>
                 <th className="text-left px-4 py-3 font-semibold">Nombre</th>

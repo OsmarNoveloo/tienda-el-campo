@@ -442,7 +442,7 @@ export default function CreditosPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-sm">
+            <table className="w-full min-w-245 text-sm">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
                   <th className="w-8 px-4 py-3"></th>

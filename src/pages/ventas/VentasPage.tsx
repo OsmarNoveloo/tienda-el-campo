@@ -144,7 +144,7 @@ export default function VentasPage() {
           <div className="p-8 text-sm text-center text-gray-400">No hay ventas para mostrar.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
+            <table className="w-full min-w-190 text-sm">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>
                   <th className="text-left px-4 py-3 font-semibold">Folio</th>
