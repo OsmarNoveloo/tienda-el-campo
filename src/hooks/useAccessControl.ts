@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { getLocalISOString } from '../lib/dateUtils'
+import { supabase } from '../lib/supabaseClient'
 
 export type AppSection =
   | 'dashboard'
@@ -32,6 +34,7 @@ export type AccessControlSection = {
 }
 
 const ACCESS_CONTROL_STORAGE_KEY = 'tienda-access-control'
+const ACCESS_CONTROL_TABLE = 'configuracion_accesos'
 
 const protectedSections: AppSection[] = ['usuariosAdmin', 'configuracion']
 
@@ -139,7 +142,7 @@ function getStoredAccessControl(): AccessControlConfig {
 }
 
 export function useAccessControl() {
-  const { isAdmin } = useAuth()
+  const { isAdmin, isAuthenticated, user } = useAuth()
   const activeRole: RoleKey = isAdmin ? 'admin' : 'cajero'
 
   const [config, setConfig] = useState<AccessControlConfig>(() => getStoredAccessControl())
@@ -148,21 +151,77 @@ export function useAccessControl() {
     window.localStorage.setItem(ACCESS_CONTROL_STORAGE_KEY, JSON.stringify(config))
   }, [config])
 
+  useEffect(() => {
+    if (!isAuthenticated) return
+
+    let cancelled = false
+
+    const loadRemoteConfig = async () => {
+      const { data, error } = await supabase
+        .from(ACCESS_CONTROL_TABLE)
+        .select('admin_permisos,cajero_permisos')
+        .eq('id', 1)
+        .maybeSingle()
+
+      if (cancelled || error || !data) return
+
+      const nextConfig = sanitizeAccessControlConfig({
+        admin: (data as any).admin_permisos ?? {},
+        cajero: (data as any).cajero_permisos ?? {},
+      })
+
+      setConfig(nextConfig)
+      window.localStorage.setItem(ACCESS_CONTROL_STORAGE_KEY, JSON.stringify(nextConfig))
+    }
+
+    void loadRemoteConfig()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isAuthenticated])
+
+  const persistRemoteConfig = useCallback(
+    async (nextConfig: AccessControlConfig) => {
+      if (!isAuthenticated) return
+
+      await supabase.from(ACCESS_CONTROL_TABLE).upsert(
+        [
+          {
+            id: 1,
+            admin_permisos: nextConfig.admin,
+            cajero_permisos: nextConfig.cajero,
+            actualizado_por: user?.id ?? null,
+            actualizado_en: getLocalISOString(),
+          },
+        ],
+        { onConflict: 'id' },
+      )
+    },
+    [isAuthenticated, user?.id],
+  )
+
   const updatePermission = useCallback((role: RoleKey, section: AppSection, allowed: boolean) => {
     setConfig((current) =>
-      sanitizeAccessControlConfig({
+      {
+        const next = sanitizeAccessControlConfig({
         ...current,
         [role]: {
           ...current[role],
           [section]: allowed,
         },
-      }),
+        })
+
+        void persistRemoteConfig(next)
+        return next
+      },
     )
-  }, [])
+  }, [persistRemoteConfig])
 
   const resetAccessControl = useCallback(() => {
     setConfig(defaultAccessControl)
-  }, [])
+    void persistRemoteConfig(defaultAccessControl)
+  }, [persistRemoteConfig])
 
   const canAccess = useCallback(
     (section: AppSection, roleOverride?: RoleKey) => {
