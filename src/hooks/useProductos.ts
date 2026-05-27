@@ -41,8 +41,32 @@ export function useProductos() {
 
   const eliminarProducto = async (id: number) => {
     const { error } = await supabase.from('productos').delete().eq('id', id)
-    if (error) throw new Error(error.message)
+
+    if (!error) {
+      await fetchProductos()
+      return { mode: 'deleted' as const }
+    }
+
+    const isFkError =
+      (error as any).code === '23503' ||
+      error.message.includes('inventario_movimientos_producto_id_fkey') ||
+      error.message.includes('venta_detalle_producto_id_fkey')
+
+    if (!isFkError) {
+      throw new Error(error.message)
+    }
+
+    const { error: deactivateError } = await supabase
+      .from('productos')
+      .update({ activo: false, actualizado_en: getLocalISOString() })
+      .eq('id', id)
+
+    if (deactivateError) {
+      throw new Error(deactivateError.message)
+    }
+
     await fetchProductos()
+    return { mode: 'deactivated' as const }
   }
 
   return { productos, loading, error, crearProducto, actualizarProducto, eliminarProducto, refetch: fetchProductos }

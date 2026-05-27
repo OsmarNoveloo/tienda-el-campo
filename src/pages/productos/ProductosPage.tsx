@@ -42,8 +42,12 @@ export default function ProductosPage() {
     if (!confirm('¿Eliminar este producto?')) return
     setEliminando(id)
     try {
-      await eliminarProducto(id)
-      toast.success('Producto eliminado')
+      const result = await eliminarProducto(id)
+      if (result.mode === 'deleted') {
+        toast.success('Producto eliminado')
+      } else {
+        toast.info('El producto tiene movimientos y se marcó como inactivo')
+      }
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Error al eliminar')
     } finally {
