@@ -1,4 +1,7 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { toast } from 'react-toastify'
+import { useAuth } from './AuthContext'
+import { supabase } from '../lib/supabaseClient'
 
 type ThemeMode = 'light' | 'dark' | 'system'
 type ResolvedTheme = 'light' | 'dark'
@@ -10,6 +13,7 @@ type ThemeContextValue = {
 }
 
 const THEME_STORAGE_KEY = 'tienda-theme-mode'
+const THEME_CONFIG_SOURCE = (import.meta.env.VITE_THEME_CONFIG_SOURCE as string | undefined)?.trim() || 'configuracion_tema'
 const DARK_MEDIA_QUERY = '(prefers-color-scheme: dark)'
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
@@ -35,9 +39,16 @@ function applyThemeToDocument(theme: ResolvedTheme) {
   document.documentElement.style.colorScheme = theme
 }
 
+function isThemeMode(value: string | null | undefined): value is ThemeMode {
+  return value === 'light' || value === 'dark' || value === 'system'
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  const { isAuthenticated, user } = useAuth()
   const [mode, setMode] = useState<ThemeMode>(() => getStoredMode())
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(getStoredMode()))
+  const remoteLoadedRef = useRef(false)
+  const warnedRemoteErrorRef = useRef(false)
 
   useEffect(() => {
     window.localStorage.setItem(THEME_STORAGE_KEY, mode)
@@ -46,6 +57,80 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setResolvedTheme(nextTheme)
     applyThemeToDocument(nextTheme)
   }, [mode])
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.id) {
+      remoteLoadedRef.current = false
+      return
+    }
+
+    let cancelled = false
+
+    const loadRemoteTheme = async () => {
+      const { data, error } = await supabase
+        .from(THEME_CONFIG_SOURCE)
+        .select('modo')
+        .eq('usuario_id', user.id)
+        .maybeSingle()
+
+      if (cancelled) {
+        remoteLoadedRef.current = true
+        return
+      }
+
+      if (error) {
+        if (!warnedRemoteErrorRef.current) {
+          warnedRemoteErrorRef.current = true
+          toast.warning('No se pudo cargar el tema desde la base. Se usará configuración local.')
+        }
+        console.error('Error cargando tema remoto:', error)
+        remoteLoadedRef.current = true
+        return
+      }
+
+      const remoteMode = (data as { modo?: string } | null)?.modo
+      if (isThemeMode(remoteMode)) {
+        setMode(remoteMode)
+      }
+
+      remoteLoadedRef.current = true
+    }
+
+    void loadRemoteTheme()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isAuthenticated, user?.id])
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.id || !remoteLoadedRef.current) return
+
+    const persistRemoteTheme = async () => {
+      const { error } = await supabase.from(THEME_CONFIG_SOURCE).upsert(
+        [
+          {
+            usuario_id: user.id,
+            modo: mode,
+          },
+        ],
+        { onConflict: 'usuario_id' },
+      )
+
+      if (!error) {
+        warnedRemoteErrorRef.current = false
+        return
+      }
+
+      if (!warnedRemoteErrorRef.current) {
+        warnedRemoteErrorRef.current = true
+        toast.warning('No se pudo guardar el tema en la base. Revisa permisos o si la vista permite upsert.')
+      }
+      console.error('Error guardando tema remoto:', error)
+    }
+
+    void persistRemoteTheme()
+  }, [isAuthenticated, mode, user?.id])
 
   useEffect(() => {
     if (mode !== 'system') return

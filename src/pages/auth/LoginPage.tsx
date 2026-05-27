@@ -80,7 +80,7 @@ export default function LoginPage() {
       return
     }
 
-    toast.success('Contrasena actualizada. Ya puedes iniciar sesion.')
+    toast.success('Contraseña actualizada. Ya puedes iniciar sesion.')
     setRecoveryOpen(false)
     setRecoveryUser('')
     setRecoveryEmail('')
@@ -127,7 +127,7 @@ export default function LoginPage() {
               onChange={(event) => setPassword(event.target.value)}
               type="password"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              placeholder="Ingresa tu contrasena"
+              placeholder="Ingresa tu contraseña"
               autoComplete="current-password"
               required
             />

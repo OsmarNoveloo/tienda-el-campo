@@ -22,6 +22,19 @@ export default function ProductosPage() {
   }
 
   const handleSubmit = async (values: Omit<Producto, 'id' | 'creado_en' | 'actualizado_en'>) => {
+    const codigoBarras = values.codigo_barras?.trim()
+    if (codigoBarras) {
+      const existeCodigo = productos.some((producto) => {
+        if (producto.id === productoEditar?.id) return false
+        return producto.codigo_barras?.trim() === codigoBarras
+      })
+
+      if (existeCodigo) {
+        toast.warning('Ya existe un producto con ese codigo de barras')
+        return
+      }
+    }
+
     try {
       if (productoEditar) {
         await actualizarProducto(productoEditar.id, values)

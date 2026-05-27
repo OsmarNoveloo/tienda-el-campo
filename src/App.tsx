@@ -7,12 +7,12 @@ import { router } from './router'
 
 function App() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
+    <AuthProvider>
+      <ThemeProvider>
         <RouterProvider router={router} />
         <ToastContainer position="top-right" autoClose={3000} />
-      </AuthProvider>
-    </ThemeProvider>
+      </ThemeProvider>
+    </AuthProvider>
   )
 }
 

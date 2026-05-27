@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useForm, type SubmitHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Camera, ImagePlus, X } from 'lucide-react'
+import { Camera, X } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import type { Producto } from '../../types/database'
@@ -19,7 +19,6 @@ const schema = z.object({
 })
 
 const SCANNER_REGION_ID = 'producto-barcode-scanner-region'
-const FILE_SCANNER_REGION_ID = 'producto-barcode-file-scan-region'
 const SUPPORTED_FORMATS = [
   Html5QrcodeSupportedFormats.EAN_13,
   Html5QrcodeSupportedFormats.EAN_8,
@@ -125,17 +124,6 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
     return message
   }
 
-  const ensureHiddenScanContainer = (id: string) => {
-    let node = document.getElementById(id)
-    if (!node) {
-      node = document.createElement('div')
-      node.id = id
-      node.style.display = 'none'
-      document.body.appendChild(node)
-    }
-    return node
-  }
-
   const openScanner = () => {
     setScannerError(null)
     setScannerOpen(true)
@@ -143,27 +131,6 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
 
   const closeScanner = () => {
     setScannerOpen(false)
-  }
-
-  const handleImageCapture: React.ChangeEventHandler<HTMLInputElement> = async (event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    try {
-      ensureHiddenScanContainer(FILE_SCANNER_REGION_ID)
-      const scanner = new Html5Qrcode(FILE_SCANNER_REGION_ID, {
-        formatsToSupport: SUPPORTED_FORMATS,
-        verbose: false,
-      })
-      const decodedText = await scanner.scanFile(file, true)
-      applyDetectedCode(decodedText)
-      await scanner.clear()
-    } catch (error) {
-      const message = getScannerErrorMessage(error)
-      toast.error(message)
-    } finally {
-      event.target.value = ''
-    }
   }
 
   useEffect(() => {
@@ -300,17 +267,6 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
                     <Camera size={13} />
                     Cámara
                   </button>
-                  <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:border-indigo-200 hover:text-indigo-600">
-                    <ImagePlus size={13} />
-                    Foto
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="hidden"
-                      onChange={handleImageCapture}
-                    />
-                  </label>
                 </div>
               </div>
               <input
@@ -319,7 +275,7 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
                 placeholder="0000000000000"
               />
               <p className="mt-1 text-[11px] text-gray-500">
-                Puedes escanear en vivo o cargar una foto para detectar código y autollenar.
+                Puedes escanear en vivo con la cámara para detectar código y autollenar.
               </p>
             </div>
             <div>
