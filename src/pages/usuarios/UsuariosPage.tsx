@@ -49,8 +49,9 @@ export default function UsuariosPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<EditingUser | null>(null)
 
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<FormInput, unknown, FormOutput>({
+  const { register, handleSubmit, reset, watch, formState: { errors, isSubmitting, isValid } } = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(schema),
+    mode: 'onChange',
     defaultValues: {
       rol_id: 0,
       nombre: '',
@@ -66,6 +67,10 @@ export default function UsuariosPage() {
     () => [...usuarios].sort((a, b) => a.nombre.localeCompare(b.nombre)),
     [usuarios],
   )
+  const passwordValue = watch('password')
+  const canSubmit = editing
+    ? isValid
+    : isValid && (passwordValue?.trim().length ?? 0) >= 6
 
   const loadRoles = useCallback(async () => {
     setRolesLoading(true)
@@ -379,7 +384,7 @@ export default function UsuariosPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !canSubmit}
                   className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {isSubmitting ? 'Guardando...' : editing ? 'Actualizar' : 'Crear usuario'}

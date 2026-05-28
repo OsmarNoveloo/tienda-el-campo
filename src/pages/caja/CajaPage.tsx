@@ -38,9 +38,10 @@ export default function CajaPage() {
     register: registerAbrir,
     handleSubmit: handleSubmitAbrir,
     reset: resetAbrir,
-    formState: { errors: errorsAbrir, isSubmitting: isSubmittingAbrir },
+    formState: { errors: errorsAbrir, isSubmitting: isSubmittingAbrir, isValid: isValidAbrir },
   } = useForm<AbrirInput, unknown, AbrirOutput>({
     resolver: zodResolver(abrirSchema),
+    mode: 'onChange',
     defaultValues: { empleado_apertura_id: 0, monto_apertura: 0 },
   })
 
@@ -48,9 +49,10 @@ export default function CajaPage() {
     register: registerCerrar,
     handleSubmit: handleSubmitCerrar,
     reset: resetCerrar,
-    formState: { errors: errorsCerrar, isSubmitting: isSubmittingCerrar },
+    formState: { errors: errorsCerrar, isSubmitting: isSubmittingCerrar, isValid: isValidCerrar },
   } = useForm<CerrarInput, unknown, CerrarOutput>({
     resolver: zodResolver(cerrarSchema),
+    mode: 'onChange',
     defaultValues: { total_efectivo: 0, total_tarjeta: 0, observacion: '' },
   })
 
@@ -345,7 +347,7 @@ export default function CajaPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingAbrir}
+                  disabled={isSubmittingAbrir || !isValidAbrir}
                   className="px-4 py-2 rounded-lg text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60"
                 >
                   {isSubmittingAbrir ? 'Abriendo...' : 'Abrir caja'}
@@ -416,7 +418,7 @@ export default function CajaPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingCerrar}
+                  disabled={isSubmittingCerrar || !isValidCerrar}
                   className="px-4 py-2 rounded-lg text-sm bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
                 >
                   {isSubmittingCerrar ? 'Cerrando...' : 'Cerrar caja'}

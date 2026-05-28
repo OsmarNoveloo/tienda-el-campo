@@ -10,6 +10,22 @@ export default function ProductosPage() {
   const [modalAbierto, setModalAbierto] = useState(false)
   const [productoEditar, setProductoEditar] = useState<Producto | null>(null)
   const [eliminando, setEliminando] = useState<number | null>(null)
+  const [busqueda, setBusqueda] = useState('')
+  const [filtroEstado, setFiltroEstado] = useState<'todos' | 'activos' | 'inactivos'>('todos')
+
+  const productosFiltrados = productos.filter((producto) => {
+    const texto = busqueda.trim().toLowerCase()
+    const coincideBusqueda = !texto
+      || producto.nombre.toLowerCase().includes(texto)
+      || (producto.sku ?? '').toLowerCase().includes(texto)
+      || (producto.codigo_barras ?? '').toLowerCase().includes(texto)
+
+    const coincideEstado = filtroEstado === 'todos'
+      || (filtroEstado === 'activos' && producto.activo)
+      || (filtroEstado === 'inactivos' && !producto.activo)
+
+    return coincideBusqueda && coincideEstado
+  })
 
   const abrirNuevo = () => {
     setProductoEditar(null)
@@ -95,12 +111,38 @@ export default function ProductosPage() {
 
       {/* Tabla */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-4 border-b border-gray-100 bg-gray-50">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input
+              type="text"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="Buscar por nombre, SKU o código de barras"
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+            <select
+              value={filtroEstado}
+              onChange={(e) => setFiltroEstado(e.target.value as 'todos' | 'activos' | 'inactivos')}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="todos">Todos los estados</option>
+              <option value="activos">Solo activos</option>
+              <option value="inactivos">Solo inactivos</option>
+            </select>
+          </div>
+        </div>
+
         {loading ? (
           <div className="p-12 text-center text-gray-400 text-sm">Cargando productos...</div>
         ) : productos.length === 0 ? (
           <div className="p-12 text-center">
             <Package className="mx-auto text-gray-300 mb-3" size={48} />
             <p className="text-gray-400 text-sm">No hay productos registrados</p>
+          </div>
+        ) : productosFiltrados.length === 0 ? (
+          <div className="p-12 text-center">
+            <Package className="mx-auto text-gray-300 mb-3" size={48} />
+            <p className="text-gray-400 text-sm">No se encontraron productos con esos filtros</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -118,7 +160,7 @@ export default function ProductosPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {productos.map((p) => (
+              {productosFiltrados.map((p) => (
                 <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-5 py-3 font-medium text-gray-800">{p.nombre}</td>
                   <td className="px-5 py-3 text-gray-500">{p.sku ?? '—'}</td>

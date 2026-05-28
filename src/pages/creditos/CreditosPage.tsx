@@ -89,14 +89,18 @@ export default function CreditosPage() {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    watch,
+    formState: { errors, isSubmitting, isValid },
   } = useForm<AbonoFormInput, unknown, AbonoFormOutput>({
     resolver: zodResolver(abonoSchema),
+    mode: 'onChange',
     defaultValues: {
       monto: 0,
       observacion: '',
     },
   })
+  const montoActual = Number(watch('monto') ?? 0)
+  const canSubmitAbono = actionMode === 'liquidar' ? true : isValid && montoActual > 0
 
   const loadCreditos = useCallback(async () => {
     const shouldShowLoading = creditos.length === 0
@@ -693,7 +697,7 @@ export default function CreditosPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !canSubmitAbono}
                   className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {isSubmitting ? (

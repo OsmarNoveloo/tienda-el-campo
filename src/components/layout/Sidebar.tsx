@@ -63,7 +63,7 @@ export default function Sidebar({ className = '', onNavigate }: SidebarProps) {
 
       {/* Footer */}
       <div className="px-5 py-4 border-t border-gray-700">
-        <p className="text-gray-500 text-xs">v1.0.0</p>
+        <p className="text-gray-500 text-xs">v1.0.5</p>
       </div>
     </aside>
   )

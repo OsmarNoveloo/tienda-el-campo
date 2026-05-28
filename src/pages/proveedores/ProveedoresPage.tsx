@@ -144,6 +144,8 @@ export default function ProveedoresPage() {
     await loadProveedores()
   }
 
+  const canSubmitProveedor = form.nombre.trim().length >= 2
+
   const toggleEstado = async (proveedor: Proveedor) => {
     const next = !proveedor.activo
     const { error } = await supabase
@@ -320,7 +322,7 @@ export default function ProveedoresPage() {
                 <button
                   type="submit"
                   className="px-4 py-2 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
-                  disabled={saving}
+                  disabled={saving || !canSubmitProveedor}
                 >
                   {saving ? 'Guardando...' : editing ? 'Guardar cambios' : 'Crear proveedor'}
                 </button>

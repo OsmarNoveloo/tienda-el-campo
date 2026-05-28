@@ -82,6 +82,11 @@ export default function PosPage() {
   const [cajaAbierta, setCajaAbierta] = useState<{ id: number; monto_apertura: number } | null>(null)
   const [cajaLoading, setCajaLoading] = useState(true)
   const cajaRequestInFlight = useRef(false)
+  const searchTypingMeta = useRef({
+    lastTs: 0,
+    isRapidSequence: true,
+    prevValue: '',
+  })
 
   const subtotal = useMemo(
     () => carrito.reduce((acc, item) => acc + Number(item.producto.precio_actual) * item.cantidad, 0),
@@ -103,6 +108,61 @@ export default function PosPage() {
       return nombre.includes(term) || sku.includes(term) || codigo.includes(term)
     })
   }, [productos, search])
+
+  const tryAddByBarcode = (rawCode: string) => {
+    const code = rawCode.trim()
+    if (!code) return false
+
+    const producto = productos.find((p) => (p.codigo_barras ?? '').trim() === code)
+    if (!producto) return false
+
+    addToCart(producto)
+    setSearch('')
+    searchTypingMeta.current = {
+      lastTs: 0,
+      isRapidSequence: true,
+      prevValue: '',
+    }
+    return true
+  }
+
+  const handleSearchChange = (value: string) => {
+    const now = Date.now()
+    const previous = searchTypingMeta.current.prevValue
+    const growing = value.length >= previous.length && value.startsWith(previous)
+    const jump = value.length - previous.length
+
+    if (!value) {
+      searchTypingMeta.current = { lastTs: now, isRapidSequence: true, prevValue: '' }
+      setSearch('')
+      return
+    }
+
+    // If many characters arrive at once (paste/scanner burst), treat it as direct input.
+    if (jump > 1 && growing) {
+      searchTypingMeta.current = { lastTs: now, isRapidSequence: true, prevValue: value }
+      if (!tryAddByBarcode(value)) setSearch(value)
+      return
+    }
+
+    if (!growing) {
+      searchTypingMeta.current = { lastTs: now, isRapidSequence: false, prevValue: value }
+      setSearch(value)
+      return
+    }
+
+    const delta = searchTypingMeta.current.lastTs === 0 ? 0 : now - searchTypingMeta.current.lastTs
+    const wasRapid = searchTypingMeta.current.isRapidSequence
+    const isRapid = wasRapid && (delta === 0 || delta <= 45)
+
+    searchTypingMeta.current = { lastTs: now, isRapidSequence: isRapid, prevValue: value }
+
+    if (isRapid && value.length >= 6 && tryAddByBarcode(value)) {
+      return
+    }
+
+    setSearch(value)
+  }
 
   const loadProductos = useCallback(async () => {
     setLoading(true)
@@ -580,7 +640,13 @@ export default function PosPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 <input
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void tryAddByBarcode(search)
+                    }
+                  }}
                   placeholder="Buscar por nombre, SKU o codigo de barras"
                   className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />

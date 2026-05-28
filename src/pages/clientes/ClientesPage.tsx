@@ -39,8 +39,9 @@ export default function ClientesPage() {
   const [deudasMap, setDeudasMap] = useState<Map<number, DeudaDetalle[]>>(new Map())
   const [searchTerm, setSearchTerm] = useState('')
 
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<FormInput, unknown, FormOutput>({
+  const { register, handleSubmit, reset, formState: { errors, isSubmitting, isValid } } = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(schema),
+    mode: 'onChange',
     defaultValues: {
       nombre: '',
       telefono: '',
@@ -451,7 +452,7 @@ export default function ClientesPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !isValid}
                   className="flex-1 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                 >
                   {isSubmitting ? 'Guardando...' : 'Guardar'}

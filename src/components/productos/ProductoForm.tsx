@@ -41,8 +41,9 @@ interface Props {
 
 export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
   "use no memo"
-  const { register, handleSubmit, reset, setValue, getValues, formState: { errors, isSubmitting } } = useForm<FormValues, unknown, FormOutput>({
+  const { register, handleSubmit, reset, setValue, getValues, watch, formState: { errors, isSubmitting } } = useForm<FormValues, unknown, FormOutput>({
     resolver: zodResolver(schema),
+    mode: 'onChange',
     defaultValues: {
       nombre: '',
       codigo_barras: '',
@@ -59,6 +60,8 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
   const [scannerError, setScannerError] = useState<string | null>(null)
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const scannerActiveRef = useRef(false)
+  const nombreActual = watch('nombre')
+  const canSubmit = nombreActual.trim().length > 0
 
   useEffect(() => {
     if (producto) {
@@ -355,7 +358,7 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || !canSubmit}
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
             >
               {isSubmitting ? 'Guardando...' : producto ? 'Actualizar' : 'Guardar'}

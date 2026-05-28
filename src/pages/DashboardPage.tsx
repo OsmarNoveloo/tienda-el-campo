@@ -85,7 +85,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <p className="text-gray-500 mb-2">Versión</p>
-              <p className="text-gray-800 font-medium">1.0.0</p>
+              <p className="text-gray-800 font-medium">1.0.5</p>
             </div>
             <div>
               <p className="text-gray-500 mb-2">Última sincronización</p>

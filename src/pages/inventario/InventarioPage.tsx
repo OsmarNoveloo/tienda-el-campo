@@ -31,8 +31,9 @@ export default function InventarioPage() {
 
   const { movimientos, loading, error, crearMovimiento, loadStockActual } = useInventario()
 
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<FormInput, unknown, FormOutput>({
+  const { register, handleSubmit, reset, formState: { errors, isSubmitting, isValid } } = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(schema),
+    mode: 'onChange',
     defaultValues: {
       producto_id: 0,
       tipo: 'ENTRADA',
@@ -315,7 +316,7 @@ export default function InventarioPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !isValid}
                   className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {isSubmitting ? 'Registrando...' : 'Registrar'}
