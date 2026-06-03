@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Warehouse, Plus, AlertCircle, RotateCcw } from 'lucide-react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { Warehouse, Plus, AlertCircle, RotateCcw, Search } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -28,6 +28,11 @@ export default function InventarioPage() {
   const [productos, setProductos] = useState<Producto[]>([])
   const [stock, setStock] = useState<StockProducto[]>([])
   const [stockLoading, setStockLoading] = useState(false)
+  const [quickSearch, setQuickSearch] = useState('')
+  const [quickCantidadInput, setQuickCantidadInput] = useState('1')
+  const [quickTipo, setQuickTipo] = useState<TipoMovimiento>('ENTRADA')
+  const [quickSubmittingId, setQuickSubmittingId] = useState<number | null>(null)
+  const deferredQuickSearch = useDeferredValue(quickSearch)
 
   const { movimientos, loading, error, crearMovimiento, loadStockActual } = useInventario()
 
@@ -57,22 +62,40 @@ export default function InventarioPage() {
     setProductos((data ?? []) as Producto[])
   }, [])
 
+  const refreshStock = useCallback(async (showLoader = false) => {
+    if (showLoader) setStockLoading(true)
+
+    try {
+      const data = await loadStockActual()
+      setStock(data)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Error al cargar stock')
+    } finally {
+      if (showLoader) setStockLoading(false)
+    }
+  }, [loadStockActual])
+
+  const aplicarCambioStockLocal = useCallback((productoId: number, tipo: TipoMovimiento, cantidad: number) => {
+    setStock((prev) => prev.map((item) => {
+      if (item.producto_id !== productoId) return item
+
+      const actual = Number(item.stock_actual)
+      if (tipo === 'ENTRADA') return { ...item, stock_actual: actual + cantidad }
+      if (tipo === 'SALIDA') return { ...item, stock_actual: actual - cantidad }
+
+      return { ...item, stock_actual: cantidad }
+    }))
+  }, [])
+
   useEffect(() => {
     loadProductos()
   }, [loadProductos])
 
   useEffect(() => {
     if (tab === 'stock') {
-      setStockLoading(true)
-      loadStockActual().then((data) => {
-        setStock(data)
-        setStockLoading(false)
-      }).catch((e) => {
-        toast.error(e.message)
-        setStockLoading(false)
-      })
+      void refreshStock(true)
     }
-  }, [tab, loadStockActual])
+  }, [tab, refreshStock])
 
   const submitForm = async (values: FormOutput) => {
     if (!user) {
@@ -103,6 +126,92 @@ export default function InventarioPage() {
     () => stock.filter((s) => s.stock_actual <= s.stock_minimo),
     [stock],
   )
+
+  const quickCantidad = useMemo(() => {
+    const parsed = Number(quickCantidadInput)
+
+    if (!Number.isFinite(parsed) || parsed <= 0) return null
+    if (!Number.isInteger(parsed * 2)) return null
+
+    return parsed
+  }, [quickCantidadInput])
+
+  const stockRows = useMemo(() => {
+    return stock.map((s) => {
+      const isLow = s.stock_actual <= s.stock_minimo
+
+      return (
+        <tr key={s.producto_id} className={`hover:bg-gray-50 ${isLow ? 'bg-amber-50' : ''}`}>
+          <td className="px-4 py-3 text-gray-800 font-medium">{s.producto_nombre}</td>
+          <td className="px-4 py-3 text-right font-semibold text-gray-800">{Number(s.stock_actual).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</td>
+          <td className="px-4 py-3 text-right text-gray-600">{Number(s.stock_minimo).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</td>
+          <td className="px-4 py-3 text-right text-gray-600">${Number(s.precio_actual).toFixed(2)}</td>
+          <td className="px-4 py-3 text-center">
+            {isLow ? (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded font-medium">
+                <AlertCircle size={12} /> Bajo
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 text-xs rounded font-medium">
+                <RotateCcw size={12} /> OK
+              </span>
+            )}
+          </td>
+        </tr>
+      )
+    })
+  }, [stock])
+
+  const quickProductos = useMemo(() => {
+    const term = deferredQuickSearch.trim().toLowerCase()
+
+    if (!term) return stock.slice(0, 12)
+
+    return stock
+      .filter((s) => s.producto_nombre.toLowerCase().includes(term))
+      .slice(0, 12)
+  }, [stock, deferredQuickSearch])
+
+  const registrarMovimientoRapido = async (productoId: number) => {
+    if (!user) {
+      toast.error('No hay sesion activa')
+      return
+    }
+
+    if (quickCantidad === null) {
+      toast.error('Cantidad invalida. Usa enteros o valores en .5')
+      return
+    }
+
+    const cantidad = quickCantidad
+    const tipoSeleccionado = quickTipo
+    const stockPrevio = stock
+
+    setQuickSubmittingId(productoId)
+    aplicarCambioStockLocal(productoId, tipoSeleccionado, cantidad)
+
+    try {
+      await crearMovimiento({
+        producto_id: productoId,
+        usuario_id: user.id,
+        tipo: tipoSeleccionado,
+        cantidad,
+        costo_unitario: null,
+        referencia_tipo: null,
+        referencia_id: null,
+        observacion: 'Registro rapido desde stock',
+      })
+
+      // Sincroniza en segundo plano sin bloquear la captura rapida.
+      void refreshStock(false)
+      toast.success('Movimiento registrado rapido')
+    } catch (e: unknown) {
+      setStock(stockPrevio)
+      toast.error(e instanceof Error ? e.message : 'Error al registrar movimiento')
+    } finally {
+      setQuickSubmittingId(null)
+    }
+  }
 
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-5">
@@ -199,6 +308,76 @@ export default function InventarioPage() {
 
       {tab === 'stock' && (
         <div className="space-y-4">
+          <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Buscar producto</label>
+                <div className="relative">
+                  <Search size={15} className="absolute left-3 top-2.5 text-gray-400" />
+                  <input
+                    type="text"
+                    value={quickSearch}
+                    onChange={(e) => setQuickSearch(e.target.value)}
+                    placeholder="Nombre del producto"
+                    className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="w-full lg:w-40">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad comun</label>
+                <input
+                  type="number"
+                  min="0.5"
+                  step="0.5"
+                  value={quickCantidadInput}
+                  onChange={(e) => setQuickCantidadInput(e.target.value)}
+                  onBlur={() => {
+                    if (quickCantidad === null) setQuickCantidadInput('1')
+                  }}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="w-full lg:w-48">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
+                <select
+                  value={quickTipo}
+                  onChange={(e) => setQuickTipo(e.target.value as TipoMovimiento)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="ENTRADA">Entrada</option>
+                  <option value="SALIDA">Salida</option>
+                  <option value="AJUSTE">Ajuste</option>
+                </select>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-500">Selecciona un producto y aplica la misma cantidad para registrar rapido.</p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+              {quickProductos.map((s) => (
+                <div key={s.producto_id} className="border border-gray-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">{s.producto_nombre}</p>
+                    <p className="text-xs text-gray-500">Stock actual: {Number(s.stock_actual).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={quickSubmittingId === s.producto_id || quickCantidad === null}
+                    onClick={() => registrarMovimientoRapido(s.producto_id)}
+                    className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {quickSubmittingId === s.producto_id ? 'Guardando...' : 'Aplicar'}
+                  </button>
+                </div>
+              ))}
+              {!quickProductos.length && (
+                <div className="col-span-full text-center text-sm text-gray-400 py-5">No se encontraron productos.</div>
+              )}
+            </div>
+          </div>
+
           {stockAlerta.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
               <div className="flex items-start gap-3">
@@ -227,28 +406,7 @@ export default function InventarioPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {stock.map((s) => {
-                    const isLow = s.stock_actual <= s.stock_minimo
-                    return (
-                      <tr key={s.producto_id} className={`hover:bg-gray-50 ${isLow ? 'bg-amber-50' : ''}`}>
-                        <td className="px-4 py-3 text-gray-800 font-medium">{s.producto_nombre}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-gray-800">{Number(s.stock_actual).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</td>
-                        <td className="px-4 py-3 text-right text-gray-600">{Number(s.stock_minimo).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</td>
-                        <td className="px-4 py-3 text-right text-gray-600">${Number(s.precio_actual).toFixed(2)}</td>
-                        <td className="px-4 py-3 text-center">
-                          {isLow ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded font-medium">
-                              <AlertCircle size={12} /> Bajo
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 text-xs rounded font-medium">
-                              <RotateCcw size={12} /> OK
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
+                  {stockRows}
                   {!stock.length && (
                     <tr>
                       <td colSpan={5} className="px-4 py-8 text-center text-gray-400">No hay productos para mostrar.</td>
