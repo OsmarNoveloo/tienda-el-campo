@@ -19,6 +19,7 @@ export type UltimaVenta = {
 }
 
 export function useDashboard() {
+  const FETCH_CHUNK = 1000
   const { config } = useSystemConfig()
   const [stats, setStats] = useState<DashboardStats>({
     ventasHoy: 0,
@@ -40,48 +41,89 @@ export function useDashboard() {
       const todayISO = getLocalISOString(today)
 
       // 1. Ventas y ingresos del día
-      const { data: ventasData, error: ventasError } = await supabase
-        .from('ventas')
-        .select('id, total')
-        .eq('estado', 'PAGADA')
-        .gte('fecha_venta', todayISO)
+      let ventasHoy = 0
+      let ingresoHoy = 0
+      let ventasFrom = 0
 
-      if (ventasError) throw ventasError
+      while (true) {
+        const ventasTo = ventasFrom + FETCH_CHUNK - 1
+        const { data: ventasData, error: ventasError } = await supabase
+          .from('ventas')
+          .select('id, total')
+          .eq('estado', 'PAGADA')
+          .gte('fecha_venta', todayISO)
+          .order('id', { ascending: true })
+          .range(ventasFrom, ventasTo)
 
-      const ventasHoy = (ventasData ?? []).length
-      const ingresoHoy = (ventasData ?? []).reduce((acc, v) => acc + Number(v.total), 0)
+        if (ventasError) throw ventasError
+
+        const rows = ventasData ?? []
+        ventasHoy += rows.length
+        ingresoHoy += rows.reduce((acc, v: any) => acc + Number(v.total), 0)
+
+        if (rows.length < FETCH_CHUNK) break
+        ventasFrom += FETCH_CHUNK
+      }
 
       // 2. Productos activos
-      const { data: productosData, error: productosError } = await supabase
+      const { count: productosActivosCount, error: productosCountError } = await supabase
         .from('productos')
-        .select('id')
+        .select('id', { count: 'exact', head: true })
         .eq('activo', true)
 
-      if (productosError) throw productosError
+      if (productosCountError) throw productosCountError
 
-      const productosActivos = (productosData ?? []).length
+      const productosActivos = productosActivosCount ?? 0
 
       // 3. Stock bajo (usando movimientos para calcular stock)
-      const { data: productosBajos, error: bajosError } = await supabase
-        .from('productos')
-        .select('id, nombre, stock_minimo')
-        .eq('activo', true)
+      const productosBajos: Array<{ id: number; stock_minimo: number }> = []
+      let productosFrom = 0
 
-      if (bajosError) throw bajosError
+      while (true) {
+        const productosTo = productosFrom + FETCH_CHUNK - 1
+        const { data: productosChunk, error: bajosError } = await supabase
+          .from('productos')
+          .select('id, stock_minimo')
+          .eq('activo', true)
+          .order('id', { ascending: true })
+          .range(productosFrom, productosTo)
+
+        if (bajosError) throw bajosError
+
+        const rows = (productosChunk ?? []) as Array<{ id: number; stock_minimo: number }>
+        productosBajos.push(...rows)
+
+        if (rows.length < FETCH_CHUNK) break
+        productosFrom += FETCH_CHUNK
+      }
 
       let stockBajo = 0
 
-      if ((productosBajos ?? []).length > 0) {
+      if (productosBajos.length > 0) {
         // Obtener movimientos para calcular stock actual
-        const { data: movimientos, error: movError } = await supabase
-          .from('inventario_movimientos')
-          .select('producto_id, tipo, cantidad')
+        const movimientos: Array<{ producto_id: number; tipo: string; cantidad: number }> = []
+        let movimientosFrom = 0
 
-        if (movError) throw movError
+        while (true) {
+          const movimientosTo = movimientosFrom + FETCH_CHUNK - 1
+          const { data: movimientosChunk, error: movError } = await supabase
+            .from('inventario_movimientos')
+            .select('producto_id, tipo, cantidad')
+            .order('id', { ascending: true })
+            .range(movimientosFrom, movimientosTo)
+
+          if (movError) throw movError
+
+          const rows = (movimientosChunk ?? []) as Array<{ producto_id: number; tipo: string; cantidad: number }>
+          movimientos.push(...rows)
+
+          if (rows.length < FETCH_CHUNK) break
+          movimientosFrom += FETCH_CHUNK
+        }
 
         // Calcular stock por producto
         const stockMap = new Map<number, number>()
-        ;(movimientos ?? []).forEach((mov: any) => {
+        movimientos.forEach((mov) => {
           const current = stockMap.get(mov.producto_id) ?? 0
           const cantidad = Number(mov.cantidad)
 
@@ -95,9 +137,7 @@ export function useDashboard() {
         })
 
         // Contar stock bajo
-        stockBajo = (productosBajos ?? []).filter(
-          (p: any) => (stockMap.get(p.id) ?? 0) <= p.stock_minimo
-        ).length
+        stockBajo = productosBajos.filter((p) => (stockMap.get(p.id) ?? 0) <= p.stock_minimo).length
       }
 
       setStats({

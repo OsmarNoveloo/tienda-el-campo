@@ -1,5 +1,5 @@
-import { Users, Plus, Pencil, AlertCircle, ChevronDown, DollarSign, Search } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Users, Plus, Pencil, AlertCircle, ChevronDown, DollarSign, Search, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Fragment, useCallback, useDeferredValue, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -30,7 +30,11 @@ type FormOutput = z.output<typeof schema>
 type EditingCliente = Pick<Cliente, 'id' | 'nombre' | 'telefono' | 'direccion' | 'limite_credito' | 'activo'>
 
 export default function ClientesPage() {
+  const PAGE_SIZE_OPTIONS = [20, 50, 100]
   const [clientes, setClientes] = useState<ClienteRow[]>([])
+  const [totalCount, setTotalCount] = useState(0)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -38,6 +42,7 @@ export default function ClientesPage() {
   const [expandedClienteId, setExpandedClienteId] = useState<number | null>(null)
   const [deudasMap, setDeudasMap] = useState<Map<number, DeudaDetalle[]>>(new Map())
   const [searchTerm, setSearchTerm] = useState('')
+  const deferredSearchTerm = useDeferredValue(searchTerm)
 
   const { register, handleSubmit, reset, formState: { errors, isSubmitting, isValid } } = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(schema),
@@ -55,30 +60,51 @@ export default function ClientesPage() {
     setLoading(true)
     setError(null)
     try {
-      const { data, error: err } = await supabase
+      const from = (currentPage - 1) * pageSize
+      const to = from + pageSize - 1
+
+      let query = supabase
         .from('clientes')
-        .select('*')
+        .select('*', { count: 'exact' })
+
+      const term = deferredSearchTerm.trim()
+      if (term) {
+        query = query.or(`nombre.ilike.%${term}%,telefono.ilike.%${term}%`)
+      }
+
+      const { data, error: err, count } = await query
         .order('nombre')
+        .range(from, to)
+
       if (err) throw err
-      
-      // Calcular total deuda por cliente
-      const clientesConDeuda: ClienteRow[] = []
-      for (const cliente of (data ?? [])) {
+
+      setTotalCount(count ?? 0)
+
+      const pageClientes = (data ?? []) as Cliente[]
+      const clienteIds = pageClientes.map((cliente) => cliente.id)
+
+      let deudaPorCliente = new Map<number, number>()
+      if (clienteIds.length > 0) {
         const { data: creditos, error: credErr } = await supabase
           .from('creditos_ventas')
-          .select('saldo_pendiente')
-          .eq('cliente_id', cliente.id)
+          .select('cliente_id,saldo_pendiente')
+          .in('cliente_id', clienteIds)
           .neq('estado', 'PAGADO')
-        
-        if (credErr) {
-          console.error(`Error cargando créditos de cliente ${cliente.id}:`, credErr)
-          clientesConDeuda.push({ ...cliente, total_deuda: 0 })
-        } else {
-          const total_deuda = (creditos ?? []).reduce((acc, c) => acc + Number(c.saldo_pendiente), 0)
-          clientesConDeuda.push({ ...cliente, total_deuda })
-        }
+
+        if (credErr) throw credErr
+
+        deudaPorCliente = (creditos ?? []).reduce((acc, credito: any) => {
+          const current = acc.get(credito.cliente_id) ?? 0
+          acc.set(credito.cliente_id, current + Number(credito.saldo_pendiente))
+          return acc
+        }, new Map<number, number>())
       }
       
+      const clientesConDeuda: ClienteRow[] = pageClientes.map((cliente) => ({
+        ...cliente,
+        total_deuda: deudaPorCliente.get(cliente.id) ?? 0,
+      }))
+
       setClientes(clientesConDeuda)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Error cargando clientes'
@@ -87,7 +113,7 @@ export default function ClientesPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [currentPage, deferredSearchTerm, pageSize])
 
   const loadDeudasCliente = useCallback(async (clienteId: number) => {
     try {
@@ -145,14 +171,15 @@ export default function ClientesPage() {
     loadClientes()
   }, [loadClientes])
 
-  const filteredClientes = useMemo(() => {
-    if (!searchTerm) return clientes
-    const term = searchTerm.toLowerCase()
-    return clientes.filter(c => 
-      c.nombre.toLowerCase().includes(term) ||
-      c.telefono?.toLowerCase().includes(term)
-    )
-  }, [clientes, searchTerm])
+  const filteredClientes = clientes
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
 
   const openCreate = () => {
     setEditing(null)
@@ -262,7 +289,10 @@ export default function ClientesPage() {
           type="text"
           placeholder="Buscar por nombre o teléfono..."
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setCurrentPage(1)
+          }}
           className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
         />
       </div>
@@ -276,9 +306,10 @@ export default function ClientesPage() {
         ) : filteredClientes.length === 0 ? (
           <div className="p-8 text-center">
             <Users className="mx-auto text-gray-300 mb-3" size={48} />
-            <p className="text-gray-400 text-sm">No hay clientes registrados</p>
+            <p className="text-gray-400 text-sm">No hay clientes para mostrar.</p>
           </div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-265 text-sm">
             <thead className="bg-gray-50 border-b border-gray-100">
@@ -391,6 +422,44 @@ export default function ClientesPage() {
             </tbody>
             </table>
           </div>
+          <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm text-gray-600">
+            <p>Pagina {currentPage} de {totalPages} · {totalCount} clientes</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setCurrentPage(1)
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                aria-label="Clientes por página"
+              >
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}/pag</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage <= 1}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página anterior"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="px-2 py-1 text-xs rounded-md bg-gray-50 border border-gray-200">{currentPage}/{totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage >= totalPages}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página siguiente"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+          </>
         )}
       </div>
 

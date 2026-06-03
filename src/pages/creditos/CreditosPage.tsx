@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   CalendarDays,
@@ -13,6 +13,8 @@ import {
   Search,
   Wallet,
   Clock3,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -22,6 +24,7 @@ import { useAuth } from '../../context/AuthContext'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { supabase } from '../../lib/supabaseClient'
 import { getLocalISOString } from '../../lib/dateUtils'
+import { normalizeSearchText } from '../../lib/searchUtils'
 import type { AbonoCredito, CreditoVenta, EstadoCredito } from '../../types/database'
 
 type CreditoEstadoNormalizado = EstadoCredito | 'PENDIENTE'
@@ -72,9 +75,13 @@ function getEstadoLabel(estado: CreditoEstadoNormalizado, saldo: number) {
 }
 
 export default function CreditosPage() {
+  const PAGE_SIZE_OPTIONS = [20, 50, 100]
   const { user } = useAuth()
   const { config } = useSystemConfig()
   const [creditos, setCreditos] = useState<CreditoRow[]>([])
+  const [totalCreditosCount, setTotalCreditosCount] = useState(0)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -84,6 +91,7 @@ export default function CreditosPage() {
   const [actionMode, setActionMode] = useState<ActionMode>('abono')
   const [selectedCredito, setSelectedCredito] = useState<CreditoRow | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const deferredSearchTerm = useDeferredValue(searchTerm)
 
   const {
     register,
@@ -103,18 +111,67 @@ export default function CreditosPage() {
   const canSubmitAbono = actionMode === 'liquidar' ? true : isValid && montoActual > 0
 
   const loadCreditos = useCallback(async () => {
-    const shouldShowLoading = creditos.length === 0
-    if (shouldShowLoading) setLoading(true)
+    setLoading(true)
     setError(null)
 
     try {
-      const { data: creditosData, error: creditosErr } = await supabase
+      const from = (currentPage - 1) * pageSize
+      const to = from + pageSize - 1
+      const term = normalizeSearchText(deferredSearchTerm)
+
+      let query = supabase
         .from('creditos_ventas')
-        .select('id, venta_id, cliente_id, usuario_id, fecha_credito, fecha_vencimiento, total_credito, saldo_pendiente, estado, observaciones')
+        .select('id, venta_id, cliente_id, usuario_id, fecha_credito, fecha_vencimiento, total_credito, saldo_pendiente, estado, observaciones', { count: 'exact' })
+
+      if (filterEstado !== 'TODOS') {
+        if (filterEstado === 'PENDIENTE') {
+          query = query
+            .gt('saldo_pendiente', 0)
+            .or('estado.eq.PENDIENTE,estado.is.null')
+        } else {
+          query = query.eq('estado', filterEstado)
+        }
+      }
+
+      if (term) {
+        const [clientesMatch, ventasMatch, usuariosMatch] = await Promise.all([
+          supabase.from('clientes').select('id').ilike('nombre', `%${term}%`).limit(1000),
+          supabase.from('ventas').select('id').ilike('folio', `%${term}%`).limit(1000),
+          supabase.from('usuarios').select('id').ilike('nombre', `%${term}%`).limit(1000),
+        ])
+
+        if (clientesMatch.error) throw clientesMatch.error
+        if (ventasMatch.error) throw ventasMatch.error
+        if (usuariosMatch.error) throw usuariosMatch.error
+
+        const clienteIds = ((clientesMatch.data ?? []) as Array<{ id: number }>).map((row) => row.id)
+        const ventaIds = ((ventasMatch.data ?? []) as Array<{ id: number }>).map((row) => row.id)
+        const usuarioIds = ((usuariosMatch.data ?? []) as Array<{ id: number }>).map((row) => row.id)
+
+        const orParts: string[] = []
+        if (clienteIds.length) orParts.push(`cliente_id.in.(${clienteIds.join(',')})`)
+        if (ventaIds.length) orParts.push(`venta_id.in.(${ventaIds.join(',')})`)
+        if (usuarioIds.length) orParts.push(`usuario_id.in.(${usuarioIds.join(',')})`)
+
+        if (!orParts.length) {
+          setCreditos([])
+          setTotalCreditosCount(0)
+          setLastUpdatedAt(new Date())
+          setLoading(false)
+          return
+        }
+
+        query = query.or(orParts.join(','))
+      }
+
+      const { data: creditosData, error: creditosErr, count } = await query
         .order('fecha_credito', { ascending: false })
-        .limit(250)
+        .order('id', { ascending: false })
+        .range(from, to)
 
       if (creditosErr) throw creditosErr
+
+      setTotalCreditosCount(count ?? 0)
 
       const rows = creditosData ?? []
       const clienteIds = [...new Set(rows.map((row: any) => row.cliente_id).filter(Boolean))] as number[]
@@ -203,9 +260,9 @@ export default function CreditosPage() {
       setError(msg)
       toast.error(msg)
     } finally {
-      if (shouldShowLoading) setLoading(false)
+      setLoading(false)
     }
-  }, [creditos.length])
+  }, [currentPage, deferredSearchTerm, filterEstado, pageSize])
 
   useEffect(() => {
     void loadCreditos()
@@ -222,22 +279,15 @@ export default function CreditosPage() {
     return () => clearInterval(interval)
   }, [config.creditosRefreshSeconds, config.pauseRefreshOnHiddenTab, loadCreditos])
 
-  const filteredCreditos = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase()
+  const filteredCreditos = creditos
 
-    return creditos.filter((credito) => {
-      const matchesSearch =
-        !term ||
-        credito.cliente_nombre.toLowerCase().includes(term) ||
-        credito.venta_folio.toLowerCase().includes(term) ||
-        credito.usuario_nombre.toLowerCase().includes(term)
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(totalCreditosCount / pageSize)), [pageSize, totalCreditosCount])
 
-      const matchesEstado =
-        filterEstado === 'TODOS' || credito.estado_normalizado === filterEstado || (filterEstado === 'PENDIENTE' && credito.saldo_actual > 0 && credito.estado_normalizado === 'PENDIENTE')
-
-      return matchesSearch && matchesEstado
-    })
-  }, [creditos, searchTerm, filterEstado])
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
 
   const resumen = useMemo(() => {
     const totalPendiente = filteredCreditos.reduce((acc, credito) => acc + Number(credito.saldo_actual), 0)
@@ -387,7 +437,7 @@ export default function CreditosPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
           <p className="text-xs font-medium uppercase text-gray-500">Créditos visibles</p>
-          <p className="mt-1 text-2xl font-bold text-gray-800">{resumen.totalCreditos}</p>
+          <p className="mt-1 text-2xl font-bold text-gray-800">{totalCreditosCount}</p>
         </div>
         <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
           <p className="text-xs font-medium uppercase text-gray-500">Saldo pendiente</p>
@@ -409,7 +459,10 @@ export default function CreditosPage() {
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value)
+                setCurrentPage(1)
+              }}
               placeholder="Buscar por cliente, folio o usuario"
               className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -419,7 +472,10 @@ export default function CreditosPage() {
             <Filter size={16} className="text-gray-400" />
             <select
               value={filterEstado}
-              onChange={(e) => setFilterEstado(e.target.value as typeof filterEstado)}
+              onChange={(e) => {
+                setFilterEstado(e.target.value as typeof filterEstado)
+                setCurrentPage(1)
+              }}
               className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="TODOS">Todos</option>
@@ -445,6 +501,7 @@ export default function CreditosPage() {
             <p className="text-sm text-gray-400">No hay créditos para mostrar.</p>
           </div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-245 text-sm">
               <thead className="bg-gray-50 text-gray-600">
@@ -638,6 +695,44 @@ export default function CreditosPage() {
               </tbody>
             </table>
           </div>
+          <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm text-gray-600">
+            <p>Pagina {currentPage} de {totalPages} · {totalCreditosCount} créditos</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setCurrentPage(1)
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                aria-label="Créditos por página"
+              >
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}/pag</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage <= 1}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página anterior"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="px-2 py-1 text-xs rounded-md bg-gray-50 border border-gray-200">{currentPage}/{totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage >= totalPages}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página siguiente"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+          </>
         )}
       </div>
 

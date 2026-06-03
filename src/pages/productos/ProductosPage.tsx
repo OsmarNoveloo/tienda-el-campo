@@ -1,31 +1,58 @@
-import { useState } from 'react'
-import { Package, Plus, Pencil, Trash2, AlertCircle } from 'lucide-react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { Package, Plus, Pencil, Trash2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { useProductos } from '../../hooks/useProductos'
 import ProductoForm from '../../components/productos/ProductoForm'
+import { includesNormalized, normalizeSearchText } from '../../lib/searchUtils'
 import type { Producto } from '../../types/database'
 
 export default function ProductosPage() {
+  const PAGE_SIZE_OPTIONS = [20, 50, 100]
   const { productos, loading, error, crearProducto, actualizarProducto, eliminarProducto } = useProductos()
   const [modalAbierto, setModalAbierto] = useState(false)
   const [productoEditar, setProductoEditar] = useState<Producto | null>(null)
   const [eliminando, setEliminando] = useState<number | null>(null)
   const [busqueda, setBusqueda] = useState('')
   const [filtroEstado, setFiltroEstado] = useState<'todos' | 'activos' | 'inactivos'>('todos')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const deferredBusqueda = useDeferredValue(busqueda)
 
-  const productosFiltrados = productos.filter((producto) => {
-    const texto = busqueda.trim().toLowerCase()
-    const coincideBusqueda = !texto
-      || producto.nombre.toLowerCase().includes(texto)
-      || (producto.sku ?? '').toLowerCase().includes(texto)
-      || (producto.codigo_barras ?? '').toLowerCase().includes(texto)
+  const productosFiltrados = useMemo(() => {
+    const texto = normalizeSearchText(deferredBusqueda)
 
-    const coincideEstado = filtroEstado === 'todos'
-      || (filtroEstado === 'activos' && producto.activo)
-      || (filtroEstado === 'inactivos' && !producto.activo)
+    return productos.filter((producto) => {
+      const coincideBusqueda = !texto
+        || includesNormalized(producto.nombre, texto)
+        || includesNormalized(producto.sku ?? '', texto)
+        || includesNormalized(producto.codigo_barras ?? '', texto)
 
-    return coincideBusqueda && coincideEstado
-  })
+      const coincideEstado = filtroEstado === 'todos'
+        || (filtroEstado === 'activos' && producto.activo)
+        || (filtroEstado === 'inactivos' && !producto.activo)
+
+      return coincideBusqueda && coincideEstado
+    })
+  }, [deferredBusqueda, filtroEstado, productos])
+
+  const totalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(productosFiltrados.length / pageSize))
+  }, [pageSize, productosFiltrados.length])
+
+  const productosPaginados = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return productosFiltrados.slice(start, start + pageSize)
+  }, [currentPage, pageSize, productosFiltrados])
+
+  const goToPage = (page: number) => {
+    setCurrentPage(Math.max(1, Math.min(totalPages, page)))
+  }
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
 
   const abrirNuevo = () => {
     setProductoEditar(null)
@@ -88,9 +115,19 @@ export default function ProductosPage() {
     <div className="p-3 sm:p-4 md:p-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-        <div className="flex items-center gap-3">
-          <Package className="text-indigo-600" size={24} />
-          <h1 className="text-2xl font-bold text-gray-800">Productos</h1>
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <Package className="text-indigo-600" size={24} />
+            <h1 className="text-2xl font-bold text-gray-800">Productos</h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2.5 py-1 text-gray-600">
+              Total: {productos.length}
+            </span>
+            <span className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 text-indigo-700">
+              Filtrados: {productosFiltrados.length}
+            </span>
+          </div>
         </div>
         <button
           onClick={abrirNuevo}
@@ -116,13 +153,19 @@ export default function ProductosPage() {
             <input
               type="text"
               value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
+              onChange={(e) => {
+                setBusqueda(e.target.value)
+                setCurrentPage(1)
+              }}
               placeholder="Buscar por nombre, SKU o código de barras"
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
             <select
               value={filtroEstado}
-              onChange={(e) => setFiltroEstado(e.target.value as 'todos' | 'activos' | 'inactivos')}
+              onChange={(e) => {
+                setFiltroEstado(e.target.value as 'todos' | 'activos' | 'inactivos')
+                setCurrentPage(1)
+              }}
               className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             >
               <option value="todos">Todos los estados</option>
@@ -145,6 +188,7 @@ export default function ProductosPage() {
             <p className="text-gray-400 text-sm">No se encontraron productos con esos filtros</p>
           </div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-225 text-sm">
             <thead className="bg-gray-50 border-b border-gray-100">
@@ -160,7 +204,7 @@ export default function ProductosPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {productosFiltrados.map((p) => (
+              {productosPaginados.map((p) => (
                 <tr key={p.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-5 py-3 font-medium text-gray-800">{p.nombre}</td>
                   <td className="px-5 py-3 text-gray-500">{p.sku ?? '—'}</td>
@@ -197,6 +241,44 @@ export default function ProductosPage() {
             </tbody>
             </table>
           </div>
+          <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm text-gray-600">
+            <p>Mostrando {productosPaginados.length} de {productosFiltrados.length} productos filtrados ({productos.length} totales)</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setCurrentPage(1)
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                aria-label="Productos por página"
+              >
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}/pag</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage <= 1}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página anterior"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="px-2 py-1 text-xs rounded-md bg-gray-50 border border-gray-200">{currentPage}/{totalPages}</span>
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage >= totalPages}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página siguiente"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+          </>
         )}
       </div>
 

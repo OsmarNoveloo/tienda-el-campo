@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { getLocalISOString } from '../../lib/dateUtils'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
+import { includesNormalized, normalizeSearchText } from '../../lib/searchUtils'
 import type { Producto } from '../../types/database'
 
 type CartItem = {
@@ -31,6 +32,8 @@ const initialSummary: DailySummary = {
   montoHoy: 0,
   unidadesVendidasHoy: 0,
 }
+
+const PRODUCTOS_FETCH_CHUNK = 1000
 
 function getTodayStartISO() {
   const date = new Date();
@@ -99,13 +102,14 @@ export default function PosPage() {
   )
 
   const productosFiltrados = useMemo(() => {
-    const term = search.trim().toLowerCase()
+    const term = normalizeSearchText(search)
     if (!term) return productos
     return productos.filter((p) => {
-      const nombre = p.nombre.toLowerCase()
-      const sku = (p.sku ?? '').toLowerCase()
-      const codigo = (p.codigo_barras ?? '').toLowerCase()
-      return nombre.includes(term) || sku.includes(term) || codigo.includes(term)
+      return (
+        includesNormalized(p.nombre, term)
+        || includesNormalized(p.sku, term)
+        || includesNormalized(p.codigo_barras, term)
+      )
     })
   }, [productos, search])
 
@@ -166,13 +170,31 @@ export default function PosPage() {
 
   const loadProductos = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('productos')
-      .select('*')
-      .eq('activo', true)
-      .order('nombre')
-    if (error) toast.error(error.message)
-    setProductos(data ?? [])
+    const allProductos: Producto[] = []
+    let from = 0
+
+    while (true) {
+      const to = from + PRODUCTOS_FETCH_CHUNK - 1
+      const { data, error } = await supabase
+        .from('productos')
+        .select('*')
+        .eq('activo', true)
+        .order('nombre')
+        .range(from, to)
+
+      if (error) {
+        toast.error(error.message)
+        break
+      }
+
+      const rows = (data ?? []) as Producto[]
+      allProductos.push(...rows)
+
+      if (rows.length < PRODUCTOS_FETCH_CHUNK) break
+      from += PRODUCTOS_FETCH_CHUNK
+    }
+
+    setProductos(allProductos)
     setLoading(false)
   }, [])
 

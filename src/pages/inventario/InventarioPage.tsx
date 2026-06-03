@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
-import { Warehouse, Plus, AlertCircle, RotateCcw, Search } from 'lucide-react'
+import { Warehouse, Plus, AlertCircle, RotateCcw, Search, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -9,6 +9,9 @@ import { supabase } from '../../lib/supabaseClient'
 import { useInventario } from '../../hooks/useInventario'
 import type { TipoMovimiento, Producto } from '../../types/database'
 import type { StockProducto } from '../../hooks/useInventario'
+
+const STOCK_PAGE_SIZE_OPTIONS = [20, 50, 100]
+const PRODUCTOS_FETCH_CHUNK = 1000
 
 const schema = z.object({
   producto_id: z.coerce.number().positive('Selecciona un producto'),
@@ -21,59 +24,123 @@ const schema = z.object({
 type FormInput = z.input<typeof schema>
 type FormOutput = z.output<typeof schema>
 
+const FORM_DEFAULT_VALUES: FormInput = {
+  producto_id: 0,
+  tipo: 'ENTRADA',
+  cantidad: 0,
+  costo_unitario: 0,
+  observacion: '',
+}
+
 export default function InventarioPage() {
   const { user } = useAuth()
   const [tab, setTab] = useState<'movimientos' | 'stock'>('movimientos')
   const [modalOpen, setModalOpen] = useState(false)
   const [productos, setProductos] = useState<Producto[]>([])
   const [stock, setStock] = useState<StockProducto[]>([])
+  const [stockTotal, setStockTotal] = useState(0)
+  const [stockLowGlobalCount, setStockLowGlobalCount] = useState(0)
+  const [stockPage, setStockPage] = useState(1)
+  const [stockPageSize, setStockPageSize] = useState(20)
+  const [stockSearchInput, setStockSearchInput] = useState('')
   const [stockLoading, setStockLoading] = useState(false)
-  const [quickSearch, setQuickSearch] = useState('')
   const [quickCantidadInput, setQuickCantidadInput] = useState('1')
   const [quickTipo, setQuickTipo] = useState<TipoMovimiento>('ENTRADA')
   const [quickSubmittingId, setQuickSubmittingId] = useState<number | null>(null)
-  const deferredQuickSearch = useDeferredValue(quickSearch)
+  const [modalProductoNombre, setModalProductoNombre] = useState<string | null>(null)
+  const deferredStockSearch = useDeferredValue(stockSearchInput)
 
-  const { movimientos, loading, error, crearMovimiento, loadStockActual } = useInventario()
+  const { movimientos, loading, error, crearMovimiento, loadStockPage, loadStockLowCount } = useInventario()
 
   const { register, handleSubmit, reset, formState: { errors, isSubmitting, isValid } } = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(schema),
     mode: 'onChange',
-    defaultValues: {
-      producto_id: 0,
-      tipo: 'ENTRADA',
-      cantidad: 0,
-      costo_unitario: 0,
-      observacion: '',
-    },
+    defaultValues: FORM_DEFAULT_VALUES,
   })
 
-  const loadProductos = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('productos')
-      .select('*')
-      .eq('activo', true)
-      .order('nombre')
+  const closeMovimientoModal = useCallback(() => {
+    setModalOpen(false)
+    setModalProductoNombre(null)
+    reset(FORM_DEFAULT_VALUES)
+  }, [reset])
 
-    if (error) {
-      toast.error(error.message)
-      return
+  const openMovimientoModal = useCallback((producto?: StockProducto) => {
+    const parsedQuickCantidad = Number(quickCantidadInput)
+    const modalCantidad = Number.isFinite(parsedQuickCantidad) && parsedQuickCantidad > 0 && Number.isInteger(parsedQuickCantidad * 2)
+      ? parsedQuickCantidad
+      : 1
+
+    if (producto) {
+      reset({
+        ...FORM_DEFAULT_VALUES,
+        producto_id: producto.producto_id,
+        tipo: quickTipo,
+        cantidad: modalCantidad,
+      })
+      setModalProductoNombre(producto.producto_nombre)
+    } else {
+      setModalProductoNombre(null)
+      reset(FORM_DEFAULT_VALUES)
     }
-    setProductos((data ?? []) as Producto[])
+
+    setModalOpen(true)
+  }, [quickCantidadInput, quickTipo, reset])
+
+  const loadProductos = useCallback(async () => {
+    const allProductos: Producto[] = []
+    let from = 0
+
+    while (true) {
+      const to = from + PRODUCTOS_FETCH_CHUNK - 1
+      const { data, error } = await supabase
+        .from('productos')
+        .select('*')
+        .eq('activo', true)
+        .order('nombre')
+        .range(from, to)
+
+      if (error) {
+        toast.error(error.message)
+        return
+      }
+
+      const rows = (data ?? []) as Producto[]
+      allProductos.push(...rows)
+
+      if (rows.length < PRODUCTOS_FETCH_CHUNK) break
+      from += PRODUCTOS_FETCH_CHUNK
+    }
+
+    setProductos(allProductos)
   }, [])
 
   const refreshStock = useCallback(async (showLoader = false) => {
     if (showLoader) setStockLoading(true)
 
     try {
-      const data = await loadStockActual()
-      setStock(data)
+      const { items, total } = await loadStockPage({
+        page: stockPage,
+        pageSize: stockPageSize,
+        search: deferredStockSearch,
+      })
+
+      setStock(items)
+      setStockTotal(total)
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Error al cargar stock')
     } finally {
       if (showLoader) setStockLoading(false)
     }
-  }, [loadStockActual])
+  }, [deferredStockSearch, loadStockPage, stockPage, stockPageSize])
+
+  const refreshStockLowGlobalCount = useCallback(async () => {
+    try {
+      const count = await loadStockLowCount()
+      setStockLowGlobalCount(count)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Error al cargar stock bajo global')
+    }
+  }, [loadStockLowCount])
 
   const aplicarCambioStockLocal = useCallback((productoId: number, tipo: TipoMovimiento, cantidad: number) => {
     setStock((prev) => prev.map((item) => {
@@ -94,8 +161,9 @@ export default function InventarioPage() {
   useEffect(() => {
     if (tab === 'stock') {
       void refreshStock(true)
+      void refreshStockLowGlobalCount()
     }
-  }, [tab, refreshStock])
+  }, [tab, refreshStock, refreshStockLowGlobalCount])
 
   const submitForm = async (values: FormOutput) => {
     if (!user) {
@@ -114,18 +182,18 @@ export default function InventarioPage() {
         referencia_id: null,
         observacion: values.observacion ?? null,
       })
+
+      if (tab === 'stock') {
+        await refreshStock(true)
+        await refreshStockLowGlobalCount()
+      }
+
       toast.success('Movimiento registrado')
-      setModalOpen(false)
-      reset()
+      closeMovimientoModal()
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Error al registrar')
     }
   }
-
-  const stockAlerta = useMemo(
-    () => stock.filter((s) => s.stock_actual <= s.stock_minimo),
-    [stock],
-  )
 
   const quickCantidad = useMemo(() => {
     const parsed = Number(quickCantidadInput)
@@ -157,20 +225,35 @@ export default function InventarioPage() {
               </span>
             )}
           </td>
+          <td className="px-4 py-3 text-right">
+            <button
+              type="button"
+              onClick={() => openMovimientoModal(s)}
+              className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+              title="Registrar movimiento"
+              aria-label="Registrar movimiento"
+            >
+              <Plus size={14} />
+            </button>
+          </td>
         </tr>
       )
     })
-  }, [stock])
+  }, [openMovimientoModal, stock])
 
-  const quickProductos = useMemo(() => {
-    const term = deferredQuickSearch.trim().toLowerCase()
+  const totalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(stockTotal / stockPageSize))
+  }, [stockPageSize, stockTotal])
 
-    if (!term) return stock.slice(0, 12)
+  const hasStockSearch = useMemo(() => stockSearchInput.trim().length > 0, [stockSearchInput])
 
-    return stock
-      .filter((s) => s.producto_nombre.toLowerCase().includes(term))
-      .slice(0, 12)
-  }, [stock, deferredQuickSearch])
+  const quickProductos = useMemo(() => stock.slice(0, 12), [stock])
+
+  useEffect(() => {
+    if (stockPage > totalPages) {
+      setStockPage(totalPages)
+    }
+  }, [stockPage, totalPages])
 
   const registrarMovimientoRapido = async (productoId: number) => {
     if (!user) {
@@ -202,8 +285,8 @@ export default function InventarioPage() {
         observacion: 'Registro rapido desde stock',
       })
 
-      // Sincroniza en segundo plano sin bloquear la captura rapida.
-      void refreshStock(false)
+      await refreshStock(true)
+      await refreshStockLowGlobalCount()
       toast.success('Movimiento registrado rapido')
     } catch (e: unknown) {
       setStock(stockPrevio)
@@ -220,12 +303,22 @@ export default function InventarioPage() {
           <Warehouse className="text-indigo-600" size={24} />
           <h1 className="text-2xl font-bold text-gray-800">Inventario</h1>
         </div>
-        <button
-          onClick={() => setModalOpen(true)}
-          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
-        >
-          <Plus size={16} /> Registrar movimiento
-        </button>
+        <div className="w-full sm:w-auto flex flex-col sm:items-end gap-2">
+          <button
+            onClick={() => openMovimientoModal()}
+            className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
+          >
+            <Plus size={16} /> Registrar movimiento
+          </button>
+
+          {tab === 'stock' && stockLowGlobalCount > 0 && (
+            <div className="inline-flex w-full sm:w-auto items-center justify-center sm:justify-start gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-700 text-xs">
+              <AlertCircle size={13} />
+              <span className="font-medium">Stock bajo:</span>
+              <span>{stockLowGlobalCount}</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -309,91 +402,91 @@ export default function InventarioPage() {
       {tab === 'stock' && (
         <div className="space-y-4">
           <div className="bg-white rounded-xl border border-gray-100 p-4 space-y-4">
-            <div className="flex flex-col lg:flex-row lg:items-end gap-3">
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Buscar producto</label>
-                <div className="relative">
-                  <Search size={15} className="absolute left-3 top-2.5 text-gray-400" />
-                  <input
-                    type="text"
-                    value={quickSearch}
-                    onChange={(e) => setQuickSearch(e.target.value)}
-                    placeholder="Nombre del producto"
-                    className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="w-full lg:w-40">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad comun</label>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Buscar producto</label>
+              <div className="relative">
+                <Search size={15} className="absolute left-3 top-2.5 text-gray-400" />
                 <input
-                  type="number"
-                  min="0.5"
-                  step="0.5"
-                  value={quickCantidadInput}
-                  onChange={(e) => setQuickCantidadInput(e.target.value)}
-                  onBlur={() => {
-                    if (quickCantidad === null) setQuickCantidadInput('1')
+                  type="text"
+                  value={stockSearchInput}
+                  onChange={(e) => {
+                    setStockSearchInput(e.target.value)
+                    setStockPage(1)
                   }}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Nombre o codigo de barras (busca en todos)"
+                  className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm"
                 />
               </div>
-
-              <div className="w-full lg:w-48">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
-                <select
-                  value={quickTipo}
-                  onChange={(e) => setQuickTipo(e.target.value as TipoMovimiento)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="ENTRADA">Entrada</option>
-                  <option value="SALIDA">Salida</option>
-                  <option value="AJUSTE">Ajuste</option>
-                </select>
-              </div>
             </div>
 
-            <p className="text-xs text-gray-500">Selecciona un producto y aplica la misma cantidad para registrar rapido.</p>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-              {quickProductos.map((s) => (
-                <div key={s.producto_id} className="border border-gray-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">{s.producto_nombre}</p>
-                    <p className="text-xs text-gray-500">Stock actual: {Number(s.stock_actual).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</p>
+            {hasStockSearch ? (
+              <>
+                <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+                  <div className="w-full lg:w-40">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad comun</label>
+                    <input
+                      type="number"
+                      min="0.5"
+                      step="0.5"
+                      value={quickCantidadInput}
+                      onChange={(e) => setQuickCantidadInput(e.target.value)}
+                      onBlur={() => {
+                        if (quickCantidad === null) setQuickCantidadInput('1')
+                      }}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    />
                   </div>
-                  <button
-                    type="button"
-                    disabled={quickSubmittingId === s.producto_id || quickCantidad === null}
-                    onClick={() => registrarMovimientoRapido(s.producto_id)}
-                    className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
-                  >
-                    {quickSubmittingId === s.producto_id ? 'Guardando...' : 'Aplicar'}
-                  </button>
-                </div>
-              ))}
-              {!quickProductos.length && (
-                <div className="col-span-full text-center text-sm text-gray-400 py-5">No se encontraron productos.</div>
-              )}
-            </div>
-          </div>
 
-          {stockAlerta.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={18} />
-                <div>
-                  <p className="font-semibold text-amber-900 text-sm">Stock bajo</p>
-                  <p className="text-amber-800 text-xs mt-1">{stockAlerta.length} productos por debajo del stock mínimo</p>
+                  <div className="w-full lg:w-48">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Tipo</label>
+                    <select
+                      value={quickTipo}
+                      onChange={(e) => setQuickTipo(e.target.value as TipoMovimiento)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="ENTRADA">Entrada</option>
+                      <option value="SALIDA">Salida</option>
+                      <option value="AJUSTE">Ajuste</option>
+                    </select>
+                  </div>
                 </div>
+
+                <p className="text-xs text-gray-500">Selecciona un producto y aplica la misma cantidad para registrar rapido. Mostrando {stock.length} de {stockTotal} productos.</p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                  {quickProductos.map((s) => (
+                    <div key={s.producto_id} className="border border-gray-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">{s.producto_nombre}</p>
+                        <p className="text-xs text-gray-500">Stock actual: {Number(s.stock_actual).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={quickSubmittingId === s.producto_id || quickCantidad === null}
+                        onClick={() => registrarMovimientoRapido(s.producto_id)}
+                        className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                      >
+                        {quickSubmittingId === s.producto_id ? 'Guardando...' : 'Aplicar'}
+                      </button>
+                    </div>
+                  ))}
+                  {!quickProductos.length && (
+                    <div className="col-span-full text-center text-sm text-gray-400 py-5">No se encontraron productos.</div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                Escribe un nombre o codigo de barras para mostrar la seleccion rapida de productos.
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
             {stockLoading ? (
               <div className="p-10 text-center text-sm text-gray-400">Cargando stock...</div>
             ) : (
+              <>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-190 text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
@@ -403,18 +496,59 @@ export default function InventarioPage() {
                     <th className="text-right px-4 py-3 font-semibold text-gray-600">Stock mínimo</th>
                     <th className="text-right px-4 py-3 font-semibold text-gray-600">Precio</th>
                     <th className="text-center px-4 py-3 font-semibold text-gray-600">Estado</th>
+                    <th className="text-right px-4 py-3 font-semibold text-gray-600">Accion</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {stockRows}
                   {!stock.length && (
                     <tr>
-                      <td colSpan={5} className="px-4 py-8 text-center text-gray-400">No hay productos para mostrar.</td>
+                      <td colSpan={6} className="px-4 py-8 text-center text-gray-400">No hay productos para mostrar.</td>
                     </tr>
                   )}
                 </tbody>
                 </table>
               </div>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-t border-gray-100 px-4 py-3 text-sm text-gray-600">
+                <p>Pagina {stockPage} de {totalPages} · {stockTotal} productos</p>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={stockPageSize}
+                    onChange={(e) => {
+                      setStockPageSize(Number(e.target.value))
+                      setStockPage(1)
+                    }}
+                    className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                    aria-label="Productos por página"
+                  >
+                    {STOCK_PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}/pag</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={stockPage <= 1}
+                    onClick={() => setStockPage((prev) => Math.max(1, prev - 1))}
+                    className="h-9 w-9 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                    aria-label="Pagina anterior"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="px-3 py-1 rounded-md bg-gray-50 border border-gray-200 text-xs font-medium text-gray-600">
+                    {stockPage}/{totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={stockPage >= totalPages}
+                    onClick={() => setStockPage((prev) => Math.min(totalPages, prev + 1))}
+                    className="h-9 w-9 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                    aria-label="Pagina siguiente"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+              </>
             )}
           </div>
         </div>
@@ -424,7 +558,9 @@ export default function InventarioPage() {
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-800">Registrar movimiento</h2>
+              <h2 className="text-lg font-semibold text-gray-800">
+                Registrar movimiento{modalProductoNombre ? `: ${modalProductoNombre}` : ''}
+              </h2>
             </div>
 
             <form onSubmit={handleSubmit(submitForm)} className="p-5 space-y-4">
@@ -450,7 +586,7 @@ export default function InventarioPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
-                <input {...register('cantidad')} type="number" step="0.001" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                <input {...register('cantidad')} autoFocus type="number" step="0.001" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
                 {errors.cantidad && <p className="text-xs text-red-500 mt-1">{errors.cantidad.message}</p>}
               </div>
 
@@ -467,7 +603,7 @@ export default function InventarioPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setModalOpen(false)}
+                  onClick={closeMovimientoModal}
                   className="px-4 py-2 rounded-lg text-sm bg-gray-100 text-gray-700 hover:bg-gray-200"
                 >
                   Cancelar

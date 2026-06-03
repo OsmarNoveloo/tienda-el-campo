@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Receipt, Search, RefreshCw } from 'lucide-react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { Receipt, Search, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { supabase } from '../../lib/supabaseClient'
+import { normalizeSearchText } from '../../lib/searchUtils'
 import type { EstadoVenta } from '../../types/database'
 
 type VentaRow = {
@@ -14,25 +15,64 @@ type VentaRow = {
 }
 
 export default function VentasPage() {
+  const PAGE_SIZE_OPTIONS = [20, 50, 100]
   const [ventas, setVentas] = useState<VentaRow[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const [pageSize, setPageSize] = useState(20)
+  const deferredSearch = useDeferredValue(search)
 
   const loadVentas = useCallback(async () => {
     setLoading(true)
 
-    const { data, error } = await supabase
+    const from = (currentPage - 1) * pageSize
+    const to = from + pageSize - 1
+    const term = normalizeSearchText(deferredSearch)
+
+    let matchedUsuarioIds: number[] = []
+    if (term) {
+      const { data: usuariosMatch, error: usuariosError } = await supabase
+        .from('usuarios')
+        .select('id')
+        .ilike('nombre', `%${term}%`)
+        .limit(1000)
+
+      if (usuariosError) {
+        toast.error(`Error buscando usuarios: ${usuariosError.message}`)
+        setVentas([])
+        setTotalCount(0)
+        setLoading(false)
+        return
+      }
+
+      matchedUsuarioIds = ((usuariosMatch ?? []) as Array<{ id: number }>).map((row) => row.id)
+    }
+
+    let query = supabase
       .from('ventas')
-      .select('id, folio, fecha_venta, total, estado, usuario_id')
+      .select('id, folio, fecha_venta, total, estado, usuario_id', { count: 'exact' })
       .order('fecha_venta', { ascending: false })
       .order('id', { ascending: false })
-      .limit(200)
+
+    if (term) {
+      if (matchedUsuarioIds.length > 0) {
+        query = query.or(`folio.ilike.%${term}%,usuario_id.in.(${matchedUsuarioIds.join(',')})`)
+      } else {
+        query = query.ilike('folio', `%${term}%`)
+      }
+    }
+
+    const { data, error, count } = await query.range(from, to)
 
     if (error) {
       toast.error(`Error cargando ventas: ${error.message}`)
       setLoading(false)
       return
     }
+
+    setTotalCount(count ?? 0)
 
     const usuarioIds = [...new Set((data ?? []).map((v: any) => v.usuario_id).filter(Boolean))] as number[]
     let usuarioMap = new Map<number, string>()
@@ -57,11 +97,19 @@ export default function VentasPage() {
 
     setVentas(mapped)
     setLoading(false)
-  }, [])
+  }, [currentPage, deferredSearch, pageSize])
 
   useEffect(() => {
     loadVentas()
   }, [loadVentas])
+
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(totalCount / pageSize)), [pageSize, totalCount])
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -72,25 +120,14 @@ export default function VentasPage() {
     return () => clearInterval(interval)
   }, [loadVentas])
 
-  const ventasFiltradas = useMemo(() => {
-    const term = search.trim().toLowerCase()
-    if (!term) return ventas
-
-    return ventas.filter((v) => {
-      const folio = v.folio.toLowerCase()
-      const usuario = v.usuario_nombre.toLowerCase()
-      return folio.includes(term) || usuario.includes(term)
-    })
-  }, [ventas, search])
-
   const totalMonto = useMemo(
-    () => ventasFiltradas.reduce((acc, v) => acc + Number(v.total), 0),
-    [ventasFiltradas],
+    () => ventas.reduce((acc, v) => acc + Number(v.total), 0),
+    [ventas],
   )
 
   const totalPagadas = useMemo(
-    () => ventasFiltradas.filter((v) => v.estado === 'PAGADA').length,
-    [ventasFiltradas],
+    () => ventas.filter((v) => v.estado === 'PAGADA').length,
+    [ventas],
   )
 
   return (
@@ -113,7 +150,7 @@ export default function VentasPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-gray-100 p-4">
           <p className="text-xs text-gray-500">Registros</p>
-          <p className="text-2xl font-bold text-gray-800">{ventasFiltradas.length}</p>
+          <p className="text-2xl font-bold text-gray-800">{totalCount}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-100 p-4">
           <p className="text-xs text-gray-500">Pagadas</p>
@@ -131,7 +168,10 @@ export default function VentasPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                setCurrentPage(1)
+              }}
               placeholder="Buscar por folio o usuario"
               className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -140,9 +180,10 @@ export default function VentasPage() {
 
         {loading ? (
           <div className="p-8 text-sm text-center text-gray-400">Cargando ventas...</div>
-        ) : ventasFiltradas.length === 0 ? (
+        ) : ventas.length === 0 ? (
           <div className="p-8 text-sm text-center text-gray-400">No hay ventas para mostrar.</div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-190 text-sm">
               <thead className="bg-gray-50 text-gray-600">
@@ -155,7 +196,7 @@ export default function VentasPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {ventasFiltradas.map((venta) => (
+                {ventas.map((venta) => (
                   <tr key={venta.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-800">{venta.folio}</td>
                     <td className="px-4 py-3 text-gray-600">{new Date(venta.fecha_venta).toLocaleString('es-MX')}</td>
@@ -171,6 +212,44 @@ export default function VentasPage() {
               </tbody>
             </table>
           </div>
+          <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm text-gray-600">
+            <p>Pagina {currentPage} de {totalPages} · {totalCount} ventas</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setCurrentPage(1)
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                aria-label="Ventas por página"
+              >
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}/pag</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage <= 1}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página anterior"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="px-2 py-1 text-xs rounded-md bg-gray-50 border border-gray-200">{currentPage}/{totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage >= totalPages}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página siguiente"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+          </>
         )}
       </div>
     </div>

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Truck, Plus, Pencil, UserCheck, UserX, Search, X, AlertCircle } from 'lucide-react'
+import { useCallback, useDeferredValue, useEffect, useState } from 'react'
+import { Truck, Plus, Pencil, UserCheck, UserX, Search, X, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { supabase } from '../../lib/supabaseClient'
 import { getLocalISOString } from '../../lib/dateUtils'
@@ -20,9 +20,14 @@ const initialForm: FormState = {
 }
 
 export default function ProveedoresPage() {
+  const PAGE_SIZE_OPTIONS = [20, 50, 100]
   const [proveedores, setProveedores] = useState<Proveedor[]>([])
+  const [totalCount, setTotalCount] = useState(0)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const deferredSearch = useDeferredValue(search)
   const [modalOpen, setModalOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Proveedor | null>(null)
@@ -30,38 +35,49 @@ export default function ProveedoresPage() {
 
   const loadProveedores = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await supabase
+    const from = (currentPage - 1) * pageSize
+    const to = from + pageSize - 1
+
+    let query = supabase
       .from('proveedores')
-      .select('*')
+      .select('*', { count: 'exact' })
+
+    const term = deferredSearch.trim()
+    if (term) {
+      query = query.or(`nombre.ilike.%${term}%,telefono.ilike.%${term}%,email.ilike.%${term}%`)
+    }
+
+    const { data, error, count } = await query
       .order('activo', { ascending: false })
       .order('nombre', { ascending: true })
+      .range(from, to)
 
     if (error) {
       toast.error(`Error cargando proveedores: ${error.message}`)
       setProveedores([])
+      setTotalCount(0)
       setLoading(false)
       return
     }
 
     setProveedores((data ?? []) as Proveedor[])
+    setTotalCount(count ?? 0)
     setLoading(false)
-  }, [])
+  }, [currentPage, deferredSearch, pageSize])
 
   useEffect(() => {
     loadProveedores()
   }, [loadProveedores])
 
-  const proveedoresFiltrados = useMemo(() => {
-    const term = search.trim().toLowerCase()
-    if (!term) return proveedores
+  const proveedoresFiltrados = proveedores
 
-    return proveedores.filter((p) => {
-      const nombre = p.nombre.toLowerCase()
-      const telefono = (p.telefono ?? '').toLowerCase()
-      const email = (p.email ?? '').toLowerCase()
-      return nombre.includes(term) || telefono.includes(term) || email.includes(term)
-    })
-  }, [proveedores, search])
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
 
   const abrirCrear = () => {
     setEditing(null)
@@ -183,7 +199,10 @@ export default function ProveedoresPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
           <input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value)
+              setCurrentPage(1)
+            }}
             placeholder="Buscar por nombre, teléfono o email"
             className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
@@ -196,6 +215,7 @@ export default function ProveedoresPage() {
         ) : proveedoresFiltrados.length === 0 ? (
           <div className="p-10 text-center text-sm text-gray-400">No hay proveedores registrados.</div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-195 text-sm">
               <thead className="bg-gray-50 text-gray-600 border-b border-gray-100">
@@ -243,6 +263,44 @@ export default function ProveedoresPage() {
               </tbody>
             </table>
           </div>
+          <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm text-gray-600">
+            <p>Pagina {currentPage} de {totalPages} · {totalCount} proveedores</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setCurrentPage(1)
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs"
+                aria-label="Proveedores por página"
+              >
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}/pag</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage <= 1}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página anterior"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="px-2 py-1 text-xs rounded-md bg-gray-50 border border-gray-200">{currentPage}/{totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage >= totalPages}
+                className="h-8 w-8 inline-flex items-center justify-center rounded-full border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                aria-label="Página siguiente"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+          </>
         )}
       </div>
 

@@ -5,6 +5,7 @@ import type { Producto } from '../types/database'
 
 export function useProductos() {
   "use no memo"
+  const PAGE_SIZE = 1000
   const [productos, setProductos] = useState<Producto[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -12,12 +13,34 @@ export function useProductos() {
   const fetchProductos = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const { data, error } = await supabase
-      .from('productos')
-      .select('*')
-      .order('nombre')
-    if (error) setError(error.message)
-    else setProductos(data ?? [])
+    const allProductos: Producto[] = []
+    let from = 0
+    let hasError = false
+
+    while (true) {
+      const to = from + PAGE_SIZE - 1
+      const { data, error } = await supabase
+        .from('productos')
+        .select('*')
+        .order('nombre')
+        .range(from, to)
+
+      if (error) {
+        setError(error.message)
+        hasError = true
+        break
+      }
+
+      const rows = (data ?? []) as Producto[]
+      allProductos.push(...rows)
+
+      if (rows.length < PAGE_SIZE) break
+      from += PAGE_SIZE
+    }
+
+    if (!hasError) {
+      setProductos(allProductos)
+    }
     setLoading(false)
   }, [])
 
