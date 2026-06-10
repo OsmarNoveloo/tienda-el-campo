@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle } from 'lucide-react'
+import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
@@ -7,6 +7,13 @@ import { getLocalISOString } from '../../lib/dateUtils'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { includesNormalized, normalizeSearchText } from '../../lib/searchUtils'
 import type { Producto } from '../../types/database'
+import {
+  saveProductosToCache, getProductosFromCache,
+  saveClientesToCache, getClientesFromCache,
+  saveCajaToCache, getCajaFromCache,
+  queueVenta, isNetworkError,
+} from '../../lib/posOfflineDB'
+import { usePosOfflineSync } from '../../hooks/usePosOfflineSync'
 
 type CartItem = {
   producto: Producto
@@ -18,6 +25,7 @@ type CartItem = {
 type DailySummary = {
   ventasHoy: number
   montoHoy: number
+  montoTotalDia: number
   unidadesVendidasHoy: number
 }
 
@@ -30,10 +38,12 @@ type ClienteCreditoOption = {
 const initialSummary: DailySummary = {
   ventasHoy: 0,
   montoHoy: 0,
+  montoTotalDia: 0,
   unidadesVendidasHoy: 0,
 }
 
 const PRODUCTOS_FETCH_CHUNK = 1000
+const SALE_TIMEOUT_MS = 4000 // si Supabase no responde en 4s, encolar offline
 
 function getTodayStartISO() {
   const date = new Date();
@@ -170,6 +180,14 @@ export default function PosPage() {
 
   const loadProductos = useCallback(async () => {
     setLoading(true)
+
+    if (!navigator.onLine) {
+      const cached = await getProductosFromCache()
+      if (cached.length > 0) setProductos(cached)
+      setLoading(false)
+      return
+    }
+
     const allProductos: Producto[] = []
     let from = 0
 
@@ -184,6 +202,8 @@ export default function PosPage() {
 
       if (error) {
         toast.error(error.message)
+        const cached = await getProductosFromCache()
+        if (cached.length > 0) setProductos(cached)
         break
       }
 
@@ -194,11 +214,20 @@ export default function PosPage() {
       from += PRODUCTOS_FETCH_CHUNK
     }
 
-    setProductos(allProductos)
+    if (allProductos.length > 0) {
+      setProductos(allProductos)
+      void saveProductosToCache(allProductos)
+    }
     setLoading(false)
   }, [])
 
   const loadClientes = useCallback(async () => {
+    if (!navigator.onLine) {
+      const cached = await getClientesFromCache()
+      if (cached.length > 0) setClientes(cached)
+      return
+    }
+
     const { data, error } = await supabase
       .from('clientes')
       .select('id,nombre,limite_credito,activo')
@@ -207,7 +236,8 @@ export default function PosPage() {
 
     if (error) {
       toast.error(`No se pudo obtener clientes: ${error.message}`)
-      setClientes([])
+      const cached = await getClientesFromCache()
+      if (cached.length > 0) setClientes(cached)
       return
     }
 
@@ -218,20 +248,41 @@ export default function PosPage() {
     })) as ClienteCreditoOption[]
 
     setClientes(mapped)
+    void saveClientesToCache(mapped)
   }, [])
 
   const loadSummary = useCallback(async () => {
     const startISO = getTodayStartISO()
 
+    const { data: ventasGlobalesData, error: ventasGlobalesError } = await supabase
+      .from('ventas')
+      .select('total')
+      .eq('estado', 'PAGADA')
+      .gte('fecha_venta', startISO)
+
+    if (ventasGlobalesError) {
+      toast.error(`Error cargando total global del dia: ${ventasGlobalesError.message}`)
+      setSummary(initialSummary)
+      return
+    }
+
+    const montoTotalDia = (ventasGlobalesData ?? []).reduce((acc, row) => acc + Number(row.total), 0)
+
+    if (!cajaAbierta) {
+      setSummary({ ...initialSummary, montoTotalDia })
+      return
+    }
+
     const { data: ventasData, error: ventasError } = await supabase
       .from('ventas')
       .select('id,total')
       .eq('estado', 'PAGADA')
+      .eq('caja_sesion_id', cajaAbierta.id)
       .gte('fecha_venta', startISO)
 
     if (ventasError) {
       toast.error(`Error cargando ventas del dia: ${ventasError.message}`)
-      setSummary(initialSummary)
+      setSummary({ ...initialSummary, montoTotalDia })
       return
     }
 
@@ -240,7 +291,7 @@ export default function PosPage() {
     const ventaIds = (ventasData ?? []).map((v) => v.id)
 
     if (ventaIds.length === 0) {
-      setSummary({ ventasHoy, montoHoy, unidadesVendidasHoy: 0 })
+      setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy: 0 })
       return
     }
 
@@ -251,18 +302,28 @@ export default function PosPage() {
 
     if (detalleError) {
       toast.error(`Error cargando detalle del dia: ${detalleError.message}`)
-      setSummary({ ventasHoy, montoHoy, unidadesVendidasHoy: 0 })
+      setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy: 0 })
       return
     }
 
     const unidadesVendidasHoy = (detalleData ?? []).reduce((acc, row) => acc + Number(row.cantidad), 0)
-    setSummary({ ventasHoy, montoHoy, unidadesVendidasHoy })
-  }, [])
+    setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy })
+  }, [cajaAbierta])
+
+  const { isOnline, pendingCount, isSyncing, syncPendingVentas, refreshPendingCount } = usePosOfflineSync(loadSummary)
 
   const verificarCajaAbierta = useCallback(async (showLoading = false) => {
     if (cajaRequestInFlight.current) return
     cajaRequestInFlight.current = true
     if (showLoading) setCajaLoading(true)
+
+    if (!navigator.onLine) {
+      const cached = getCajaFromCache()
+      setCajaAbierta(cached)
+      if (showLoading) setCajaLoading(false)
+      cajaRequestInFlight.current = false
+      return
+    }
 
     const { data, error } = await supabase
       .from('caja_sesiones')
@@ -274,13 +335,16 @@ export default function PosPage() {
 
     if (error) {
       console.error('Error verificando caja:', error.message)
+      const cached = getCajaFromCache()
+      if (cached) setCajaAbierta(cached)
       if (showLoading) setCajaLoading(false)
       cajaRequestInFlight.current = false
       return
     }
 
+    const next = data ?? null
+    saveCajaToCache(next)
     setCajaAbierta((prev) => {
-      const next = data ?? null
       if (!prev && !next) return prev
       if (prev && next && prev.id === next.id && prev.monto_apertura === next.monto_apertura) return prev
       return next
@@ -336,6 +400,10 @@ export default function PosPage() {
       void supabase.removeChannel(channel)
     }
   }, [config.pauseRefreshOnHiddenTab, verificarCajaAbierta])
+
+  useEffect(() => {
+    void loadSummary()
+  }, [loadSummary])
   
 
   // Refrescar resumen periódicamente solo en pestaña visible
@@ -435,110 +503,155 @@ export default function PosPage() {
     const folio = generateFolio()
     const total = Number(subtotal.toFixed(2))
     const estadoVenta = tipoCobro === 'CREDITO' ? 'CANCELADA' : 'PAGADA'
+    const regularItems = carrito.filter((item) => !item.isQuickItem)
+    const quickItems = carrito.filter((item) => item.isQuickItem)
 
-    const { data: ventaRow, error: ventaError } = await supabase
-      .from('ventas')
-      .insert([
-        {
-          caja_sesion_id: cajaAbierta.id,
-          usuario_id: user.id,
-          folio,
-          subtotal: total,
-          descuento: 0,
-          impuesto: 0,
-          total,
-          estado: estadoVenta,
-          observacion: tipoCobro === 'CREDITO' ? 'Venta registrada a crédito desde POS' : null,
-          fecha_venta: getLocalISOString(),
-        },
-      ])
-      .select('id')
-      .single()
-
-    if (ventaError || !ventaRow) {
-      toast.error(ventaError?.message ?? 'No se pudo crear la venta.')
-      setProcesandoVenta(false)
-      return
+    // Calcula la observación final (crédito + adicionales) antes de cualquier llamada
+    let observacion: string | null = tipoCobro === 'CREDITO' ? 'Venta registrada a crédito desde POS' : null
+    if (quickItems.length > 0) {
+      const quickText = `Adicionales: ${quickItems
+        .map((item) => `${item.quickCode ?? 'SIN-CODIGO'}:$${(Number(item.producto.precio_actual) * Number(item.cantidad)).toFixed(2)}`)
+        .join(', ')}`
+      observacion = observacion ? `${observacion} | ${quickText}` : quickText
     }
 
-    const regularItems = carrito.filter((item) => !item.isQuickItem)
+    // Payloads sin IDs generados por BD (se añaden al insertar o al sincronizar)
+    const ventaPayload = {
+      caja_sesion_id: cajaAbierta.id,
+      usuario_id: user.id,
+      folio,
+      subtotal: total,
+      descuento: 0,
+      impuesto: 0,
+      total,
+      estado: estadoVenta,
+      observacion,
+      fecha_venta: getLocalISOString(),
+    }
 
     const detallePayload = regularItems.map((item) => {
       const precio = Number(item.producto.precio_actual)
       const cantidad = Number(item.cantidad)
-      const lineSubtotal = Number((precio * cantidad).toFixed(2))
       return {
-        venta_id: ventaRow.id,
         producto_id: item.producto.id,
         cantidad,
         precio_unitario: precio,
         descuento: 0,
-        subtotal: lineSubtotal,
+        subtotal: Number((precio * cantidad).toFixed(2)),
         costo_unitario: Number(item.producto.costo_actual),
       }
     })
 
+    const movimientosPayload = regularItems.map((item) => ({
+      producto_id: item.producto.id,
+      usuario_id: user.id,
+      tipo: 'SALIDA',
+      cantidad: Number(item.cantidad),
+      costo_unitario: Number(item.producto.costo_actual),
+      referencia_tipo: 'VENTA',
+      observacion: `Salida por venta ${folio}`,
+      fecha_movimiento: getLocalISOString(),
+    }))
+
+    const creditoPayload = tipoCobro === 'CREDITO' ? {
+      cliente_id: Number(clienteCreditoId),
+      usuario_id: user.id,
+      fecha_credito: getLocalISOString(),
+      total_credito: total,
+      saldo_pendiente: total,
+      estado: 'PENDIENTE',
+      observaciones: `Crédito generado desde POS (${folio})`,
+    } : null
+
+    const resetCarrito = () => {
+      setCarrito([])
+      setTipoCobro('CONTADO')
+      setClienteCreditoId('')
+    }
+
+    const guardarOffline = async () => {
+      await queueVenta({ folio, ventaPayload, detallePayload, movimientosPayload, creditoPayload, createdAt: getLocalISOString() })
+      void refreshPendingCount()
+      setSummary((prev) => ({
+        ...prev,
+        ventasHoy: prev.ventasHoy + 1,
+        montoHoy: prev.montoHoy + total,
+        montoTotalDia: prev.montoTotalDia + total,
+        unidadesVendidasHoy: prev.unidadesVendidasHoy + totalItems,
+      }))
+      resetCarrito()
+      toast.info(`Sin conexión — venta guardada localmente (${folio})`)
+      setProcesandoVenta(false)
+    }
+
+    // --- RUTA OFFLINE ---
+    if (!navigator.onLine) {
+      await guardarOffline()
+      return
+    }
+
+    // --- RUTA ONLINE ---
+    const abortCtrl = new AbortController()
+    const abortTimer = setTimeout(() => abortCtrl.abort(), SALE_TIMEOUT_MS)
+
+    let ventaId: number
+    try {
+      const { data: ventaRow, error: ventaError } = await supabase
+        .from('ventas')
+        .insert([ventaPayload])
+        .select('id')
+        .abortSignal(abortCtrl.signal)
+        .single()
+
+      clearTimeout(abortTimer)
+
+      if (ventaError || !ventaRow) {
+        if (isNetworkError(ventaError)) {
+          await guardarOffline()
+        } else {
+          toast.error(ventaError?.message ?? 'No se pudo crear la venta.')
+          setProcesandoVenta(false)
+        }
+        return
+      }
+
+      ventaId = ventaRow.id as number
+    } catch {
+      clearTimeout(abortTimer)
+      await guardarOffline()
+      return
+    }
+
     if (detallePayload.length > 0) {
-      const { error: detalleError } = await supabase.from('venta_detalle').insert(detallePayload)
+      const { error: detalleError } = await supabase
+        .from('venta_detalle')
+        .insert(detallePayload.map((d) => ({ ...d, venta_id: ventaId })))
       if (detalleError) {
-        toast.error(`Venta creada, pero fallo detalle: ${detalleError.message}`)
+        toast.error(`Venta creada, pero falló detalle: ${detalleError.message}`)
         setProcesandoVenta(false)
         return
       }
     }
 
-    const movimientosPayload = regularItems.map((item) => ({
-      producto_id: item.producto.id,
-      usuario_id: user.id,
-      tipo: 'SALIDA' as const,
-      cantidad: Number(item.cantidad),
-      costo_unitario: Number(item.producto.costo_actual),
-      referencia_tipo: 'VENTA',
-      referencia_id: ventaRow.id,
-      observacion: `Salida por venta ${folio}`,
-      fecha_movimiento: getLocalISOString(),
-    }))
     if (movimientosPayload.length > 0) {
-      const { error: movimientoError } = await supabase.from('inventario_movimientos').insert(movimientosPayload)
+      const { error: movimientoError } = await supabase
+        .from('inventario_movimientos')
+        .insert(movimientosPayload.map((m) => ({ ...m, referencia_id: ventaId })))
       if (movimientoError) {
-        toast.warning(`Venta guardada, pero no se registro movimiento: ${movimientoError.message}`)
+        toast.warning(`Venta guardada, pero no se registró movimiento: ${movimientoError.message}`)
       }
     }
 
-    if (tipoCobro === 'CREDITO') {
-      const { error: creditoError } = await supabase.from('creditos_ventas').insert([
-        {
-          venta_id: ventaRow.id,
-          cliente_id: Number(clienteCreditoId),
-          usuario_id: user.id,
-          fecha_credito: getLocalISOString(),
-          total_credito: total,
-          saldo_pendiente: total,
-          estado: 'PENDIENTE',
-          observaciones: `Crédito generado desde POS (${folio})`,
-        },
-      ])
-
+    if (creditoPayload) {
+      const { error: creditoError } = await supabase
+        .from('creditos_ventas')
+        .insert([{ ...creditoPayload, venta_id: ventaId }])
       if (creditoError) {
-        toast.warning(`Venta guardada, pero no se registro crédito: ${creditoError.message}`)
+        toast.warning(`Venta guardada, pero no se registró crédito: ${creditoError.message}`)
       }
     }
 
-    const quickItems = carrito.filter((item) => item.isQuickItem)
-    if (quickItems.length > 0) {
-      const currentObservation = tipoCobro === 'CREDITO' ? 'Venta registrada a crédito desde POS' : null
-      const quickText = `Adicionales: ${quickItems
-        .map((item) => `${item.quickCode ?? 'SIN-CODIGO'}:$${(Number(item.producto.precio_actual) * Number(item.cantidad)).toFixed(2)}`)
-        .join(', ')}`
-      await supabase
-        .from('ventas')
-        .update({ observacion: currentObservation ? `${currentObservation} | ${quickText}` : quickText })
-        .eq('id', ventaRow.id)
-    }
-
-    setCarrito([])
-    setTipoCobro('CONTADO')
-    setClienteCreditoId('')
+    resetCarrito()
     await loadSummary()
     toast.success(
       tipoCobro === 'CREDITO'
@@ -607,21 +720,74 @@ export default function PosPage() {
 
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <ShoppingCart className="text-indigo-600" size={24} />
-          <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
+      <div className="space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <ShoppingCart className="text-indigo-600" size={24} />
+            <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
+          </div>
+          <button
+            onClick={hacerCorte}
+            disabled={haciendoCorte || !cajaAbierta}
+            className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+            title={!cajaAbierta ? 'Abre una caja para hacer corte' : ''}
+          >
+            <Wallet size={16} />
+            {haciendoCorte ? 'Generando corte...' : 'Hacer corte'}
+          </button>
         </div>
-        <button
-          onClick={hacerCorte}
-          disabled={haciendoCorte || !cajaAbierta}
-          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
-          title={!cajaAbierta ? 'Abre una caja para hacer corte' : ''}
-        >
-          <Wallet size={16} />
-          {haciendoCorte ? 'Generando corte...' : 'Hacer corte'}
-        </button>
+
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
+            <p className="text-[11px] text-gray-500 uppercase">Apertura</p>
+            <p className="text-sm sm:text-base font-semibold text-gray-800">
+              ${Number(cajaAbierta?.monto_apertura ?? 0).toFixed(2)}
+            </p>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
+            <p className="text-[11px] text-gray-500 uppercase">Ventas del dia</p>
+            <p className="text-sm sm:text-base font-semibold text-gray-800">{summary.ventasHoy}</p>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
+            <p className="text-[11px] text-gray-500 uppercase">Monto del dia</p>
+            <p className="text-sm sm:text-base font-semibold text-emerald-700">${summary.montoHoy.toFixed(2)}</p>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
+            <p className="text-[11px] text-gray-500 uppercase">Total global dia</p>
+            <p className="text-sm sm:text-base font-semibold text-blue-700">${summary.montoTotalDia.toFixed(2)}</p>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
+            <p className="text-[11px] text-gray-500 uppercase">Unidades</p>
+            <p className="text-sm sm:text-base font-semibold text-indigo-700">
+              {summary.unidadesVendidasHoy.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+            </p>
+          </div>
+        </div>
       </div>
+
+      {!isOnline && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-2 text-sm">
+          <WifiOff size={15} className="text-amber-600 shrink-0" />
+          <span className="text-amber-800 font-medium">Sin conexión</span>
+          <span className="text-amber-700">— las ventas se guardan localmente y se sincronizan al recuperar internet.</span>
+        </div>
+      )}
+
+      {isOnline && pendingCount > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between gap-3 text-sm">
+          <span className="text-blue-800">
+            {pendingCount} venta{pendingCount > 1 ? 's' : ''} pendiente{pendingCount > 1 ? 's' : ''} de sincronizar
+          </span>
+          <button
+            onClick={() => void syncPendingVentas()}
+            disabled={isSyncing}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-60"
+          >
+            <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Sincronizando...' : 'Sincronizar ahora'}
+          </button>
+        </div>
+      )}
 
       {!cajaAbierta && cajaLoading === false && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
@@ -634,25 +800,10 @@ export default function PosPage() {
       )}
 
       {cajaAbierta && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
-          <p className="text-xs font-semibold text-emerald-700 uppercase">Caja abierta • Monto: ${Number(cajaAbierta.monto_apertura).toFixed(2)}</p>
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          <p className="text-xs font-semibold text-emerald-700 uppercase">Caja abierta</p>
         </div>
       )}
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl border border-gray-100 p-4">
-          <p className="text-xs text-gray-500">Ventas del dia</p>
-          <p className="text-2xl font-bold text-gray-800">{summary.ventasHoy}</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4">
-          <p className="text-xs text-gray-500">Monto vendido del dia</p>
-          <p className="text-2xl font-bold text-emerald-700">${summary.montoHoy.toFixed(2)}</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 p-4">
-          <p className="text-xs text-gray-500">Cantidad vendida del dia</p>
-          <p className="text-2xl font-bold text-indigo-700">{summary.unidadesVendidasHoy.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</p>
-        </div>
-      </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <section className="xl:col-span-2 bg-white rounded-xl border border-gray-100 overflow-hidden">
