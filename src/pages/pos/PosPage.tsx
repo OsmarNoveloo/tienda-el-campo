@@ -87,7 +87,6 @@ export default function PosPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [refreshingProductos, setRefreshingProductos] = useState(false)
-  const [procesandoVenta, setProcesandoVenta] = useState(false)
   const [haciendoCorte, setHaciendoCorte] = useState(false)
   const [productoRapidoPrecio, setProductoRapidoPrecio] = useState('')
   const [summary, setSummary] = useState<DailySummary>(initialSummary)
@@ -527,33 +526,22 @@ export default function PosPage() {
     setCarrito((prev) => prev.filter((item) => item.producto.id !== productoId))
   }
 
-  const finalizarVenta = async () => {
-    if (!user) {
-      toast.error('No hay sesión activa para registrar la venta.')
-      return
-    }
-    if (!cajaAbierta) {
-      toast.error('No hay caja abierta. Abre una caja desde el módulo Caja.')
-      return
-    }
-    if (carrito.length === 0) {
-      toast.info('Agrega productos al carrito.')
-      return
-    }
-    if (tipoCobro === 'CREDITO' && !clienteCreditoId) {
-      toast.error('Selecciona un cliente para registrar deuda.')
-      return
-    }
+  const finalizarVenta = () => {
+    if (!user) { toast.error('No hay sesión activa para registrar la venta.'); return }
+    if (!cajaAbierta) { toast.error('No hay caja abierta. Abre una caja desde el módulo Caja.'); return }
+    if (carrito.length === 0) { toast.info('Agrega productos al carrito.'); return }
+    if (tipoCobro === 'CREDITO' && !clienteCreditoId) { toast.error('Selecciona un cliente para registrar deuda.'); return }
 
-    setProcesandoVenta(true)
+    // Capturar todo antes de limpiar el carrito
     const folio = generateFolio()
     const total = Number(subtotal.toFixed(2))
-    const estadoVenta = tipoCobro === 'CREDITO' ? 'CANCELADA' : 'PAGADA'
+    const capturedTotalItems = totalItems
+    const capturedTipoCobro = tipoCobro
+    const estadoVenta = capturedTipoCobro === 'CREDITO' ? 'CANCELADA' : 'PAGADA'
     const regularItems = carrito.filter((item) => !item.isQuickItem)
     const quickItems = carrito.filter((item) => item.isQuickItem)
 
-    // Calcula la observación final (crédito + adicionales) antes de cualquier llamada
-    let observacion: string | null = tipoCobro === 'CREDITO' ? 'Venta registrada a crédito desde POS' : null
+    let observacion: string | null = capturedTipoCobro === 'CREDITO' ? 'Venta registrada a crédito desde POS' : null
     if (quickItems.length > 0) {
       const quickText = `Adicionales: ${quickItems
         .map((item) => `${item.quickCode ?? 'SIN-CODIGO'}:$${(Number(item.producto.precio_actual) * Number(item.cantidad)).toFixed(2)}`)
@@ -561,7 +549,6 @@ export default function PosPage() {
       observacion = observacion ? `${observacion} | ${quickText}` : quickText
     }
 
-    // Payloads sin IDs generados por BD (se añaden al insertar o al sincronizar)
     const ventaPayload = {
       caja_sesion_id: cajaAbierta.id,
       usuario_id: user.id,
@@ -599,7 +586,7 @@ export default function PosPage() {
       fecha_movimiento: getLocalISOString(),
     }))
 
-    const creditoPayload = tipoCobro === 'CREDITO' ? {
+    const creditoPayload = capturedTipoCobro === 'CREDITO' ? {
       cliente_id: Number(clienteCreditoId),
       usuario_id: user.id,
       fecha_credito: getLocalISOString(),
@@ -609,102 +596,84 @@ export default function PosPage() {
       observaciones: `Crédito generado desde POS (${folio})`,
     } : null
 
-    const resetCarrito = () => {
-      setCarrito([])
-      setTipoCobro('CONTADO')
-      setClienteCreditoId('')
-    }
-
-    const guardarOffline = async () => {
-      await queueVenta({ folio, ventaPayload, detallePayload, movimientosPayload, creditoPayload, createdAt: getLocalISOString() })
-      void refreshPendingCount()
-      setSummary((prev) => ({
-        ...prev,
-        ventasHoy: prev.ventasHoy + 1,
-        montoHoy: prev.montoHoy + total,
-        montoTotalDia: prev.montoTotalDia + total,
-        unidadesVendidasHoy: prev.unidadesVendidasHoy + totalItems,
-      }))
-      resetCarrito()
-      toast.info(`Sin conexión — venta guardada localmente (${folio})`)
-      setProcesandoVenta(false)
-    }
-
-    // --- RUTA OFFLINE ---
-    if (!navigator.onLine) {
-      await guardarOffline()
-      return
-    }
-
-    // --- RUTA ONLINE ---
-    const abortCtrl = new AbortController()
-    const abortTimer = setTimeout(() => abortCtrl.abort(), SALE_TIMEOUT_MS)
-
-    let ventaId: number
-    try {
-      const { data: ventaRow, error: ventaError } = await supabase
-        .from('ventas')
-        .insert([ventaPayload])
-        .select('id')
-        .abortSignal(abortCtrl.signal)
-        .single()
-
-      clearTimeout(abortTimer)
-
-      if (ventaError || !ventaRow) {
-        if (isNetworkError(ventaError)) {
-          await guardarOffline()
-        } else {
-          toast.error(ventaError?.message ?? 'No se pudo crear la venta.')
-          setProcesandoVenta(false)
-        }
-        return
-      }
-
-      ventaId = ventaRow.id as number
-    } catch {
-      clearTimeout(abortTimer)
-      await guardarOffline()
-      return
-    }
-
-    if (detallePayload.length > 0) {
-      const { error: detalleError } = await supabase
-        .from('venta_detalle')
-        .insert(detallePayload.map((d) => ({ ...d, venta_id: ventaId })))
-      if (detalleError) {
-        toast.error(`Venta creada, pero falló detalle: ${detalleError.message}`)
-        setProcesandoVenta(false)
-        return
-      }
-    }
-
-    if (movimientosPayload.length > 0) {
-      const { error: movimientoError } = await supabase
-        .from('inventario_movimientos')
-        .insert(movimientosPayload.map((m) => ({ ...m, referencia_id: ventaId })))
-      if (movimientoError) {
-        toast.warning(`Venta guardada, pero no se registró movimiento: ${movimientoError.message}`)
-      }
-    }
-
-    if (creditoPayload) {
-      const { error: creditoError } = await supabase
-        .from('creditos_ventas')
-        .insert([{ ...creditoPayload, venta_id: ventaId }])
-      if (creditoError) {
-        toast.warning(`Venta guardada, pero no se registró crédito: ${creditoError.message}`)
-      }
-    }
-
-    resetCarrito()
-    await loadSummary()
+    // === OPTIMISTA: liberar UI inmediatamente ===
+    setCarrito([])
+    setTipoCobro('CONTADO')
+    setClienteCreditoId('')
+    setSummary((prev) => ({
+      ...prev,
+      ventasHoy: prev.ventasHoy + 1,
+      montoHoy: prev.montoHoy + total,
+      montoTotalDia: prev.montoTotalDia + total,
+      unidadesVendidasHoy: prev.unidadesVendidasHoy + capturedTotalItems,
+    }))
     toast.success(
-      tipoCobro === 'CREDITO'
-        ? `Crédito registrado para cliente (${folio})`
-        : `Venta registrada: ${folio}`,
+      capturedTipoCobro === 'CREDITO' ? `Crédito registrado (${folio})` : `Venta: ${folio}`,
+      { autoClose: 2000 },
     )
-    setProcesandoVenta(false)
+
+    // === SEGUNDO PLANO: persistir sin bloquear la UI ===
+    void (async () => {
+      const encolarOffline = async () => {
+        await queueVenta({ folio, ventaPayload, detallePayload, movimientosPayload, creditoPayload, createdAt: getLocalISOString() })
+        void refreshPendingCount()
+        toast.info(`Sin conexión — venta en cola (${folio})`, { autoClose: 3000 })
+      }
+
+      if (!navigator.onLine) {
+        await encolarOffline()
+        return
+      }
+
+      const abortCtrl = new AbortController()
+      const abortTimer = setTimeout(() => abortCtrl.abort(), SALE_TIMEOUT_MS)
+
+      let ventaId: number
+      try {
+        const { data: ventaRow, error: ventaError } = await supabase
+          .from('ventas')
+          .insert([ventaPayload])
+          .select('id')
+          .abortSignal(abortCtrl.signal)
+          .single()
+
+        clearTimeout(abortTimer)
+
+        if (ventaError || !ventaRow) {
+          if (isNetworkError(ventaError)) {
+            await encolarOffline()
+          } else {
+            toast.error(ventaError?.message ?? 'No se pudo guardar la venta.')
+          }
+          return
+        }
+
+        ventaId = ventaRow.id as number
+      } catch {
+        clearTimeout(abortTimer)
+        await encolarOffline()
+        return
+      }
+
+      // Insertar detalle, movimientos y crédito en paralelo
+      await Promise.all([
+        detallePayload.length > 0
+          ? supabase.from('venta_detalle')
+              .insert(detallePayload.map((d) => ({ ...d, venta_id: ventaId })))
+              .then(({ error }) => { if (error) console.error('Detalle venta:', error.message) })
+          : Promise.resolve(),
+        movimientosPayload.length > 0
+          ? supabase.from('inventario_movimientos')
+              .insert(movimientosPayload.map((m) => ({ ...m, referencia_id: ventaId })))
+              .then(({ error }) => { if (error) console.warn('Movimiento inventario:', error.message) })
+          : Promise.resolve(),
+        creditoPayload
+          ? supabase.from('creditos_ventas')
+              .insert([{ ...creditoPayload, venta_id: ventaId }])
+              .then(({ error }) => { if (error) console.warn('Crédito venta:', error.message) })
+          : Promise.resolve(),
+      ])
+    })()
   }
 
   const hacerCorte = async () => {
@@ -1061,11 +1030,11 @@ export default function PosPage() {
             </div>
             <button
               onClick={finalizarVenta}
-              disabled={!carrito.length || procesandoVenta || !cajaAbierta}
+              disabled={!carrito.length || !cajaAbierta}
               className="w-full mt-2 py-2.5 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50"
               title={!cajaAbierta ? 'Abre una caja para vender' : ''}
             >
-              {procesandoVenta ? 'Guardando venta...' : 'Finalizar venta'}
+              Finalizar venta
             </button>
           </div>
         </section>
