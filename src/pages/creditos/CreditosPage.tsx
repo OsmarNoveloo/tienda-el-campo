@@ -23,7 +23,7 @@ import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { supabase } from '../../lib/supabaseClient'
-import { getLocalISOString } from '../../lib/dateUtils'
+import { getLocalISOString, formatDateTime, formatDate } from '../../lib/dateUtils'
 import { normalizeSearchText } from '../../lib/searchUtils'
 import type { AbonoCredito, CreditoVenta, EstadoCredito } from '../../types/database'
 
@@ -53,6 +53,14 @@ type AbonoFormInput = z.input<typeof abonoSchema>
 type AbonoFormOutput = z.output<typeof abonoSchema>
 
 type ActionMode = 'abono' | 'liquidar'
+
+type ClienteDeudaRow = {
+  cliente_id: number
+  cliente_nombre: string
+  cliente_telefono: string | null
+  total_deuda: number
+  creditos_activos: number
+}
 
 function formatMoney(value: number) {
   return `$${Number(value).toFixed(2)}`
@@ -91,6 +99,11 @@ export default function CreditosPage() {
   const [actionMode, setActionMode] = useState<ActionMode>('abono')
   const [selectedCredito, setSelectedCredito] = useState<CreditoRow | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const [vistaMode, setVistaMode] = useState<'creditos' | 'clientes'>('creditos')
+  const [clientesDeuda, setClientesDeuda] = useState<ClienteDeudaRow[]>([])
+  const [loadingClientesDeuda, setLoadingClientesDeuda] = useState(false)
+  const [selectedClienteDeuda, setSelectedClienteDeuda] = useState<ClienteDeudaRow | null>(null)
+  const [isClienteMode, setIsClienteMode] = useState(false)
   const deferredSearchTerm = useDeferredValue(searchTerm)
 
   const {
@@ -264,9 +277,67 @@ export default function CreditosPage() {
     }
   }, [currentPage, deferredSearchTerm, filterEstado, pageSize])
 
+  const loadClientesDeuda = useCallback(async () => {
+    setLoadingClientesDeuda(true)
+    try {
+      const { data: creditsData, error: creditsErr } = await supabase
+        .from('creditos_ventas')
+        .select('cliente_id, saldo_pendiente')
+        .not('estado', 'in', '("PAGADO","CANCELADO")')
+        .gt('saldo_pendiente', 0)
+
+      if (creditsErr) throw creditsErr
+
+      const byCliente = new Map<number, { total: number; count: number }>()
+      for (const row of (creditsData ?? []) as any[]) {
+        const prev = byCliente.get(row.cliente_id) ?? { total: 0, count: 0 }
+        byCliente.set(row.cliente_id, { total: prev.total + Number(row.saldo_pendiente), count: prev.count + 1 })
+      }
+
+      if (byCliente.size === 0) {
+        setClientesDeuda([])
+        return
+      }
+
+      const clienteIds = [...byCliente.keys()]
+      const { data: clientesData, error: clientesErr } = await supabase
+        .from('clientes')
+        .select('id, nombre, telefono')
+        .in('id', clienteIds)
+
+      if (clientesErr) throw clientesErr
+
+      const clienteMap = new Map((clientesData ?? []).map((c: any) => [c.id, c]))
+
+      const result: ClienteDeudaRow[] = clienteIds
+        .map((id) => {
+          const agg = byCliente.get(id)!
+          const cliente = clienteMap.get(id)
+          return {
+            cliente_id: id,
+            cliente_nombre: cliente?.nombre ?? 'Sin nombre',
+            cliente_telefono: cliente?.telefono ?? null,
+            total_deuda: agg.total,
+            creditos_activos: agg.count,
+          }
+        })
+        .sort((a, b) => b.total_deuda - a.total_deuda)
+
+      setClientesDeuda(result)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error cargando deudas por cliente')
+    } finally {
+      setLoadingClientesDeuda(false)
+    }
+  }, [])
+
   useEffect(() => {
     void loadCreditos()
   }, [loadCreditos])
+
+  useEffect(() => {
+    if (vistaMode === 'clientes') void loadClientesDeuda()
+  }, [vistaMode, loadClientesDeuda])
 
   useEffect(() => {
     const refreshMs = config.creditosRefreshSeconds * 1000
@@ -299,6 +370,8 @@ export default function CreditosPage() {
   }, [filteredCreditos])
 
   const openActionModal = (credito: CreditoRow, mode: ActionMode) => {
+    setIsClienteMode(false)
+    setSelectedClienteDeuda(null)
     setSelectedCredito(credito)
     setActionMode(mode)
     setModalOpen(true)
@@ -308,20 +381,102 @@ export default function CreditosPage() {
     })
   }
 
+  const openClienteModal = (clienteDeuda: ClienteDeudaRow, mode: ActionMode) => {
+    setIsClienteMode(true)
+    setSelectedCredito(null)
+    setSelectedClienteDeuda(clienteDeuda)
+    setActionMode(mode)
+    setModalOpen(true)
+    reset({
+      monto: mode === 'liquidar' ? clienteDeuda.total_deuda : 0,
+      observacion: '',
+    })
+  }
+
   const closeModal = () => {
     setModalOpen(false)
     setSelectedCredito(null)
+    setSelectedClienteDeuda(null)
+    setIsClienteMode(false)
     reset({ monto: 0, observacion: '' })
   }
 
   const submitAbono = async (values: AbonoFormOutput) => {
-    if (!selectedCredito) {
-      toast.error('Selecciona un crédito')
+    if (!user) {
+      toast.error('No hay sesión activa para registrar el abono')
       return
     }
 
-    if (!user) {
-      toast.error('No hay sesión activa para registrar el abono')
+    // Modo cliente: distribuir pago entre todos los créditos del cliente
+    if (isClienteMode && selectedClienteDeuda) {
+      const saldoTotal = selectedClienteDeuda.total_deuda
+      const montoFinal = actionMode === 'liquidar' ? saldoTotal : Number(values.monto)
+
+      if (montoFinal <= 0) {
+        toast.error('El monto debe ser mayor a 0')
+        return
+      }
+      if (montoFinal > saldoTotal + 0.001) {
+        toast.error('El abono no puede superar la deuda total del cliente')
+        return
+      }
+
+      const { data: creditsData, error: fetchErr } = await supabase
+        .from('creditos_ventas')
+        .select('id, saldo_pendiente')
+        .eq('cliente_id', selectedClienteDeuda.cliente_id)
+        .not('estado', 'in', '("PAGADO","CANCELADO")')
+        .gt('saldo_pendiente', 0)
+        .order('fecha_credito', { ascending: true })
+
+      if (fetchErr) { toast.error(fetchErr.message); return }
+
+      let remaining = montoFinal
+      const abonosToInsert: any[] = []
+      const creditosToUpdate: { id: number; saldo: number; estado: string }[] = []
+
+      for (const credit of (creditsData ?? []) as any[]) {
+        if (remaining <= 0.001) break
+        const saldo = Number(credit.saldo_pendiente)
+        const abonoMonto = Number(Math.min(remaining, saldo).toFixed(2))
+        const nuevoSaldo = Number(Math.max(saldo - abonoMonto, 0).toFixed(2))
+
+        abonosToInsert.push({
+          credito_id: credit.id,
+          usuario_id: user.id,
+          monto: abonoMonto,
+          fecha_abono: getLocalISOString(),
+          metodo_pago_id: null,
+          observacion: values.observacion?.trim() || null,
+        })
+        creditosToUpdate.push({ id: credit.id, saldo: nuevoSaldo, estado: nuevoSaldo <= 0 ? 'PAGADO' : 'ABONANDO' })
+        remaining -= abonoMonto
+      }
+
+      const { error: abonoErr } = await supabase.from('abonos_credito').insert(abonosToInsert)
+      if (abonoErr) { toast.error(abonoErr.message); return }
+
+      for (const upd of creditosToUpdate) {
+        const { error: updErr } = await supabase
+          .from('creditos_ventas')
+          .update({ saldo_pendiente: upd.saldo, estado: upd.estado })
+          .eq('id', upd.id)
+        if (updErr) toast.warning(`Error actualizando crédito ${upd.id}: ${updErr.message}`)
+      }
+
+      toast.success(
+        actionMode === 'liquidar'
+          ? `Deuda de ${selectedClienteDeuda.cliente_nombre} liquidada`
+          : `Abono distribuido en ${abonosToInsert.length} crédito${abonosToInsert.length !== 1 ? 's' : ''}`,
+      )
+      closeModal()
+      await Promise.all([loadClientesDeuda(), loadCreditos()])
+      return
+    }
+
+    // Modo crédito individual
+    if (!selectedCredito) {
+      toast.error('Selecciona un crédito')
       return
     }
 
@@ -453,43 +608,126 @@ export default function CreditosPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="relative w-full lg:max-w-md">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value)
-                setCurrentPage(1)
-              }}
-              placeholder="Buscar por cliente, folio o usuario"
-              className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Filter size={16} className="text-gray-400" />
-            <select
-              value={filterEstado}
-              onChange={(e) => {
-                setFilterEstado(e.target.value as typeof filterEstado)
-                setCurrentPage(1)
-              }}
-              className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="TODOS">Todos</option>
-              <option value="PENDIENTE">Pendientes</option>
-              <option value="ABONANDO">Abonando</option>
-              <option value="PAGADO">Liquidados</option>
-              <option value="VENCIDO">Vencidos</option>
-              <option value="CANCELADO">Cancelados</option>
-            </select>
-          </div>
+      <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm space-y-3">
+        {/* Toggle vista */}
+        <div className="flex gap-1 rounded-lg border border-gray-200 overflow-hidden w-fit">
+          <button
+            type="button"
+            onClick={() => setVistaMode('creditos')}
+            className={`px-4 py-1.5 text-xs font-semibold transition-colors ${vistaMode === 'creditos' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+          >
+            Por crédito
+          </button>
+          <button
+            type="button"
+            onClick={() => setVistaMode('clientes')}
+            className={`px-4 py-1.5 text-xs font-semibold transition-colors ${vistaMode === 'clientes' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+          >
+            Por cliente
+          </button>
         </div>
+
+        {vistaMode === 'creditos' && (
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="relative w-full lg:max-w-md">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value)
+                  setCurrentPage(1)
+                }}
+                placeholder="Buscar por cliente, folio o usuario"
+                className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Filter size={16} className="text-gray-400" />
+              <select
+                value={filterEstado}
+                onChange={(e) => {
+                  setFilterEstado(e.target.value as typeof filterEstado)
+                  setCurrentPage(1)
+                }}
+                className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="TODOS">Todos</option>
+                <option value="PENDIENTE">Pendientes</option>
+                <option value="ABONANDO">Abonando</option>
+                <option value="PAGADO">Liquidados</option>
+                <option value="VENCIDO">Vencidos</option>
+                <option value="CANCELADO">Cancelados</option>
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      {/* ── Vista por cliente ── */}
+      {vistaMode === 'clientes' && (
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+          {loadingClientesDeuda ? (
+            <div className="flex items-center justify-center gap-3 p-10 text-sm text-gray-400">
+              <Loader2 className="animate-spin" size={16} />
+              Cargando...
+            </div>
+          ) : clientesDeuda.length === 0 ? (
+            <div className="p-10 text-center">
+              <CheckCircle2 className="mx-auto mb-3 text-emerald-300" size={48} />
+              <p className="text-sm text-gray-400">Sin deudas pendientes. ¡Todos al corriente!</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold">Cliente</th>
+                    <th className="px-4 py-3 text-center font-semibold">Créditos activos</th>
+                    <th className="px-4 py-3 text-right font-semibold">Deuda total</th>
+                    <th className="px-4 py-3 text-right font-semibold">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {clientesDeuda.map((cliente) => (
+                    <tr key={cliente.cliente_id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-gray-800">{cliente.cliente_nombre}</span>
+                          <span className="text-xs text-gray-500">{cliente.cliente_telefono ?? 'Sin teléfono'}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-center text-gray-600">{cliente.creditos_activos}</td>
+                      <td className="px-4 py-3 text-right font-bold text-rose-600">{formatMoney(cliente.total_deuda)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <button
+                            onClick={() => openClienteModal(cliente, 'abono')}
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                          >
+                            <Wallet size={13} />
+                            Abonar
+                          </button>
+                          <button
+                            onClick={() => openClienteModal(cliente, 'liquidar')}
+                            className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                          >
+                            <CheckCircle2 size={13} />
+                            Liquidar todo
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Vista por crédito ── */}
+      <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden" style={{ display: vistaMode === 'creditos' ? undefined : 'none' }}>
         {loading ? (
           <div className="flex items-center justify-center gap-3 p-10 text-sm text-gray-400">
             <Loader2 className="animate-spin" size={16} />
@@ -540,7 +778,7 @@ export default function CreditosPage() {
                             <span className="text-xs text-gray-500">{credito.cliente_telefono ?? 'Sin teléfono'}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-gray-600">{new Date(credito.fecha_credito).toLocaleString('es-MX')}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatDateTime(credito.fecha_credito)}</td>
                         <td className="px-4 py-3 text-right font-semibold text-gray-800">{formatMoney(Number(credito.total_credito))}</td>
                         <td className="px-4 py-3 text-right font-semibold text-rose-600">{formatMoney(saldo)}</td>
                         <td className="px-4 py-3 text-center">
@@ -582,7 +820,7 @@ export default function CreditosPage() {
                                   </div>
                                   <div className="flex items-center gap-2 text-xs text-gray-500">
                                     <CalendarDays size={13} />
-                                    {credito.fecha_vencimiento ? `Vence ${new Date(credito.fecha_vencimiento).toLocaleDateString('es-MX')}` : 'Sin fecha de vencimiento'}
+                                    {credito.fecha_vencimiento ? `Vence ${formatDate(credito.fecha_vencimiento)}` : 'Sin fecha de vencimiento'}
                                   </div>
                                 </div>
 
@@ -635,7 +873,7 @@ export default function CreditosPage() {
                                             <span className="text-gray-400">por</span>
                                             <span>{abono.usuario_nombre}</span>
                                           </div>
-                                          <span className="text-gray-500">{new Date(abono.fecha_abono).toLocaleString('es-MX')}</span>
+                                          <span className="text-gray-500">{formatDateTime(abono.fecha_abono)}</span>
                                         </div>
                                         <div className="mt-1 flex items-start justify-between gap-3 text-gray-500">
                                           <span>{abono.observacion ?? 'Sin observación'}</span>
@@ -736,28 +974,48 @@ export default function CreditosPage() {
         )}
       </div>
 
-      {modalOpen && selectedCredito && (
+      {modalOpen && (selectedCredito || selectedClienteDeuda) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="border-b border-gray-100 px-5 py-4">
               <h2 className="text-lg font-semibold text-gray-800">
-                {actionMode === 'liquidar' ? 'Liquidar crédito' : 'Registrar abono'}
+                {actionMode === 'liquidar'
+                  ? isClienteMode ? 'Liquidar deuda del cliente' : 'Liquidar crédito'
+                  : isClienteMode ? 'Abonar a deuda del cliente' : 'Registrar abono'}
               </h2>
               <p className="mt-1 text-xs text-gray-500">
-                {selectedCredito.cliente_nombre} - {selectedCredito.venta_folio}
+                {isClienteMode
+                  ? selectedClienteDeuda!.cliente_nombre
+                  : `${selectedCredito!.cliente_nombre} — ${selectedCredito!.venta_folio}`}
               </p>
             </div>
 
             <form onSubmit={handleSubmit(submitAbono)} className="space-y-4 p-5">
               <div className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
-                <div className="flex items-center justify-between">
-                  <span>Saldo pendiente</span>
-                  <span className="font-semibold text-rose-600">{formatMoney(selectedCredito.saldo_actual)}</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
-                  <span>Total crédito</span>
-                  <span>{formatMoney(Number(selectedCredito.total_credito))}</span>
-                </div>
+                {isClienteMode ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span>Deuda total del cliente</span>
+                      <span className="font-semibold text-rose-600">{formatMoney(selectedClienteDeuda!.total_deuda)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
+                      <span>Créditos activos</span>
+                      <span>{selectedClienteDeuda!.creditos_activos}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-400">El pago se distribuye del crédito más antiguo al más reciente.</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span>Saldo pendiente</span>
+                      <span className="font-semibold text-rose-600">{formatMoney(selectedCredito!.saldo_actual)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
+                      <span>Total crédito</span>
+                      <span>{formatMoney(Number(selectedCredito!.total_credito))}</span>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div>

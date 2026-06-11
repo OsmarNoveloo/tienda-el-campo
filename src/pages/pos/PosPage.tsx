@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw } from 'lucide-react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { getLocalISOString } from '../../lib/dateUtils'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
-import { includesNormalized, normalizeSearchText } from '../../lib/searchUtils'
+import { normalizeSearchText } from '../../lib/searchUtils'
 import type { Producto } from '../../types/database'
 import {
   saveProductosToCache, getProductosFromCache,
@@ -32,7 +32,7 @@ type DailySummary = {
 type ClienteCreditoOption = {
   id: number
   nombre: string
-  limite_credito: number | null
+  saldo_deuda: number
 }
 
 const initialSummary: DailySummary = {
@@ -43,6 +43,7 @@ const initialSummary: DailySummary = {
 }
 
 const PRODUCTOS_FETCH_CHUNK = 1000
+const PRODUCTOS_PAGE_SIZE = 20
 const SALE_TIMEOUT_MS = 4000 // si Supabase no responde en 4s, encolar offline
 
 function getTodayStartISO() {
@@ -85,6 +86,7 @@ export default function PosPage() {
   const [carrito, setCarrito] = useState<CartItem[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
+  const [refreshingProductos, setRefreshingProductos] = useState(false)
   const [procesandoVenta, setProcesandoVenta] = useState(false)
   const [haciendoCorte, setHaciendoCorte] = useState(false)
   const [productoRapidoPrecio, setProductoRapidoPrecio] = useState('')
@@ -92,7 +94,7 @@ export default function PosPage() {
   const [clientes, setClientes] = useState<ClienteCreditoOption[]>([])
   const [tipoCobro, setTipoCobro] = useState<'CONTADO' | 'CREDITO'>('CONTADO')
   const [clienteCreditoId, setClienteCreditoId] = useState<number | ''>('')
-  const [cajaAbierta, setCajaAbierta] = useState<{ id: number; monto_apertura: number } | null>(null)
+  const [cajaAbierta, setCajaAbierta] = useState<{ id: number; monto_apertura: number; fecha_apertura: string } | null>(null)
   const [cajaLoading, setCajaLoading] = useState(true)
   const cajaRequestInFlight = useRef(false)
   const searchTypingMeta = useRef({
@@ -111,17 +113,40 @@ export default function PosPage() {
     [carrito],
   )
 
+  const deferredSearch = useDeferredValue(search)
+  const [productoPage, setProductoPage] = useState(1)
+
+  // Pre-normalizar una sola vez cuando cambia la lista de productos
+  const productosNorm = useMemo(
+    () => productos.map((p) => ({
+      p,
+      n: normalizeSearchText(p.nombre),
+      s: normalizeSearchText(p.sku),
+      b: normalizeSearchText(p.codigo_barras),
+    })),
+    [productos],
+  )
+
   const productosFiltrados = useMemo(() => {
-    const term = normalizeSearchText(search)
+    const term = normalizeSearchText(deferredSearch)
     if (!term) return productos
-    return productos.filter((p) => {
-      return (
-        includesNormalized(p.nombre, term)
-        || includesNormalized(p.sku, term)
-        || includesNormalized(p.codigo_barras, term)
-      )
-    })
-  }, [productos, search])
+    return productosNorm
+      .filter(({ n, s, b }) => n.includes(term) || s.includes(term) || b.includes(term))
+      .map(({ p }) => p)
+  }, [productos, productosNorm, deferredSearch])
+
+  // Resetear a página 1 cuando cambia el filtro
+  useEffect(() => { setProductoPage(1) }, [deferredSearch])
+
+  const productosTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(productosFiltrados.length / PRODUCTOS_PAGE_SIZE)),
+    [productosFiltrados],
+  )
+
+  const productosPaginados = useMemo(
+    () => productosFiltrados.slice((productoPage - 1) * PRODUCTOS_PAGE_SIZE, productoPage * PRODUCTOS_PAGE_SIZE),
+    [productosFiltrados, productoPage],
+  )
 
   const tryAddByBarcode = (rawCode: string) => {
     const code = rawCode.trim()
@@ -179,15 +204,21 @@ export default function PosPage() {
   }
 
   const loadProductos = useCallback(async () => {
-    setLoading(true)
+    // Mostrar cache al instante para no bloquear la UI en conexiones lentas
+    const cached = await getProductosFromCache()
+    if (cached.length > 0) {
+      setProductos(cached)
+      setLoading(false)
+    } else {
+      setLoading(true)
+    }
 
     if (!navigator.onLine) {
-      const cached = await getProductosFromCache()
-      if (cached.length > 0) setProductos(cached)
       setLoading(false)
       return
     }
 
+    setRefreshingProductos(true)
     const allProductos: Producto[] = []
     let from = 0
 
@@ -201,9 +232,7 @@ export default function PosPage() {
         .range(from, to)
 
       if (error) {
-        toast.error(error.message)
-        const cached = await getProductosFromCache()
-        if (cached.length > 0) setProductos(cached)
+        if (cached.length === 0) toast.error(error.message)
         break
       }
 
@@ -219,32 +248,47 @@ export default function PosPage() {
       void saveProductosToCache(allProductos)
     }
     setLoading(false)
+    setRefreshingProductos(false)
   }, [])
 
   const loadClientes = useCallback(async () => {
-    if (!navigator.onLine) {
-      const cached = await getClientesFromCache()
-      if (cached.length > 0) setClientes(cached)
-      return
-    }
+    // Mostrar cache al instante
+    const cached = await getClientesFromCache()
+    if (cached.length > 0) setClientes(cached)
+
+    if (!navigator.onLine) return
 
     const { data, error } = await supabase
       .from('clientes')
-      .select('id,nombre,limite_credito,activo')
+      .select('id,nombre,activo')
       .eq('activo', true)
       .order('nombre')
 
     if (error) {
-      toast.error(`No se pudo obtener clientes: ${error.message}`)
-      const cached = await getClientesFromCache()
-      if (cached.length > 0) setClientes(cached)
+      if (cached.length === 0) toast.error(`No se pudo obtener clientes: ${error.message}`)
       return
+    }
+
+    const clienteIds = (data ?? []).map((c: any) => c.id as number)
+    let saldoMap = new Map<number, number>()
+
+    if (clienteIds.length > 0) {
+      const { data: saldosData } = await supabase
+        .from('creditos_ventas')
+        .select('cliente_id, saldo_pendiente')
+        .in('cliente_id', clienteIds)
+        .not('estado', 'in', '("PAGADO","CANCELADO")')
+        .gt('saldo_pendiente', 0)
+
+      for (const row of (saldosData ?? []) as any[]) {
+        saldoMap.set(row.cliente_id, (saldoMap.get(row.cliente_id) ?? 0) + Number(row.saldo_pendiente))
+      }
     }
 
     const mapped = (data ?? []).map((row: any) => ({
       id: row.id,
       nombre: row.nombre,
-      limite_credito: row.limite_credito ?? null,
+      saldo_deuda: saldoMap.get(row.id) ?? 0,
     })) as ClienteCreditoOption[]
 
     setClientes(mapped)
@@ -252,7 +296,9 @@ export default function PosPage() {
   }, [])
 
   const loadSummary = useCallback(async () => {
-    const startISO = getTodayStartISO()
+    // Usar fecha_apertura de la caja activa para que al cambiar de día sin hacer corte
+    // las ventas de la sesión anterior sigan contando en el resumen
+    const startISO = cajaAbierta?.fecha_apertura ?? getTodayStartISO()
 
     const { data: ventasGlobalesData, error: ventasGlobalesError } = await supabase
       .from('ventas')
@@ -327,7 +373,7 @@ export default function PosPage() {
 
     const { data, error } = await supabase
       .from('caja_sesiones')
-      .select('id,monto_apertura')
+      .select('id,monto_apertura,fecha_apertura')
       .eq('estado', 'ABIERTA')
       .order('fecha_apertura', { ascending: false })
       .limit(1)
@@ -342,11 +388,11 @@ export default function PosPage() {
       return
     }
 
-    const next = data ?? null
+    const next = data ? { id: data.id as number, monto_apertura: data.monto_apertura as number, fecha_apertura: data.fecha_apertura as string } : null
     saveCajaToCache(next)
     setCajaAbierta((prev) => {
       if (!prev && !next) return prev
-      if (prev && next && prev.id === next.id && prev.monto_apertura === next.monto_apertura) return prev
+      if (prev && next && prev.id === next.id && prev.monto_apertura === next.monto_apertura && prev.fecha_apertura === next.fecha_apertura) return prev
       return next
     })
 
@@ -679,6 +725,7 @@ export default function PosPage() {
       {
         caja_sesion_id: cajaAbierta.id,
         usuario_id: user.id,
+        fecha_corte: getLocalISOString(),
         total_ventas: Number(summary.montoHoy.toFixed(2)),
         total_efectivo: Number(summary.montoHoy.toFixed(2)),
         total_tarjeta: 0,
@@ -722,15 +769,28 @@ export default function PosPage() {
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <ShoppingCart className="text-indigo-600" size={24} />
             <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
+            {cajaLoading === false && (
+              cajaAbierta
+                ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                    Caja abierta
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-red-100 text-red-700">
+                    <AlertCircle size={11} className="shrink-0" />
+                    Sin caja — ve al módulo Caja
+                  </span>
+                )
+            )}
           </div>
           <button
             onClick={hacerCorte}
             disabled={haciendoCorte || !cajaAbierta}
             className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
-            title={!cajaAbierta ? 'Abre una caja para hacer corte' : ''}
           >
             <Wallet size={16} />
             {haciendoCorte ? 'Generando corte...' : 'Hacer corte'}
@@ -789,22 +849,6 @@ export default function PosPage() {
         </div>
       )}
 
-      {!cajaAbierta && cajaLoading === false && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
-          <AlertCircle className="text-red-600 shrink-0 mt-0.5" size={18} />
-          <div>
-            <p className="font-semibold text-red-900 text-sm">No hay caja abierta</p>
-            <p className="text-red-800 text-xs mt-1">Abre una caja desde el módulo <strong>Caja</strong> para poder vender.</p>
-          </div>
-        </div>
-      )}
-
-      {cajaAbierta && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-          <p className="text-xs font-semibold text-emerald-700 uppercase">Caja abierta</p>
-        </div>
-      )}
-
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <section className="xl:col-span-2 bg-white rounded-xl border border-gray-100 overflow-hidden">
           <div className="p-4 border-b border-gray-100">
@@ -854,38 +898,73 @@ export default function PosPage() {
                 </button>
               </div>
 
-              <p className="text-xs text-gray-500">
-                Solo ingresa el precio y presiona agregar. Se genera un código interno único para la venta.
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-500">
+                  Solo ingresa el precio y presiona agregar. Se genera un código interno único para la venta.
+                </p>
+                {refreshingProductos && (
+                  <span className="inline-flex items-center gap-1 text-xs text-gray-400">
+                    <RefreshCw size={11} className="animate-spin" />
+                    Actualizando...
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
           {loading ? (
             <div className="p-10 text-center text-sm text-gray-400">Cargando productos...</div>
           ) : (
-            <div className="max-h-140 overflow-auto divide-y divide-gray-50">
-              {productosFiltrados.map((producto) => (
-                <div key={producto.id} className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-gray-800">{producto.nombre}</p>
-                    <p className="text-xs text-gray-500">SKU: {producto.sku ?? 'N/A'} | Codigo: {producto.codigo_barras ?? 'N/A'}</p>
+            <>
+              <div className="divide-y divide-gray-50">
+                {productosPaginados.map((producto) => (
+                  <div key={producto.id} className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-gray-800">{producto.nombre}</p>
+                      <p className="text-xs text-gray-500">SKU: {producto.sku ?? 'N/A'} | Codigo: {producto.codigo_barras ?? 'N/A'}</p>
+                    </div>
+                    <div className="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-3">
+                      <p className="font-semibold text-gray-800">${Number(producto.precio_actual).toFixed(2)}</p>
+                      <button
+                        onClick={() => addToCart(producto)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
+                      >
+                        <Plus size={14} />
+                        Agregar
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-3">
-                    <p className="font-semibold text-gray-800">${Number(producto.precio_actual).toFixed(2)}</p>
+                ))}
+                {productosFiltrados.length === 0 && (
+                  <div className="p-8 text-center text-sm text-gray-400">No hay productos para mostrar.</div>
+                )}
+              </div>
+
+              {productosFiltrados.length > 0 && (
+                <div className="px-4 py-2 border-t border-gray-100 flex items-center justify-between gap-2 text-xs text-gray-500">
+                  <span>{productosFiltrados.length} producto{productosFiltrados.length !== 1 ? 's' : ''}</span>
+                  <div className="flex items-center gap-1">
                     <button
-                      onClick={() => addToCart(producto)}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
+                      type="button"
+                      onClick={() => setProductoPage((p) => Math.max(1, p - 1))}
+                      disabled={productoPage <= 1}
+                      className="h-7 w-7 inline-flex items-center justify-center rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
                     >
-                      <Plus size={14} />
-                      Agregar
+                      <ChevronLeft size={13} />
+                    </button>
+                    <span className="px-2">{productoPage}/{productosTotalPages}</span>
+                    <button
+                      type="button"
+                      onClick={() => setProductoPage((p) => Math.min(productosTotalPages, p + 1))}
+                      disabled={productoPage >= productosTotalPages}
+                      className="h-7 w-7 inline-flex items-center justify-center rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
+                    >
+                      <ChevronRight size={13} />
                     </button>
                   </div>
                 </div>
-              ))}
-              {!productosFiltrados.length && (
-                <div className="p-8 text-center text-sm text-gray-400">No hay productos para mostrar.</div>
               )}
-            </div>
+            </>
           )}
         </section>
 
@@ -966,7 +1045,7 @@ export default function PosPage() {
                   {clientes.map((cliente) => (
                     <option key={cliente.id} value={cliente.id}>
                       {cliente.nombre}
-                      {cliente.limite_credito !== null ? ` • Límite: $${Number(cliente.limite_credito).toFixed(2)}` : ''}
+                      {cliente.saldo_deuda > 0 ? ` • Debe: $${Number(cliente.saldo_deuda).toFixed(2)}` : ' • Sin deuda'}
                     </option>
                   ))}
                 </select>

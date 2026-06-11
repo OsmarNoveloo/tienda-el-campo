@@ -145,7 +145,7 @@ export interface CorteCaja {
   id: number
   caja_sesion_id: number
   usuario_id: number
-  fecha_corte: string
+  fecha_corte: string | null
   total_ventas: number
   total_efectivo: number
   total_tarjeta: number

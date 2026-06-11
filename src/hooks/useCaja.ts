@@ -187,6 +187,67 @@ export function useCaja() {
     loadCortes()
   }, [loadCajaActual, loadCortes])
 
+  const recalcularCorte = async (corteId: number, cajaSesionId: number) => {
+    setLoading(true)
+    setError(null)
+
+    // Sumar todas las ventas PAGADA de esa sesión de caja
+    const { data: ventasData, error: ventasErr } = await supabase
+      .from('ventas')
+      .select('id,total')
+      .eq('estado', 'PAGADA')
+      .eq('caja_sesion_id', cajaSesionId)
+
+    if (ventasErr) {
+      setError(ventasErr.message)
+      setLoading(false)
+      throw new Error(ventasErr.message)
+    }
+
+    const ventaIds = (ventasData ?? []).map((v: any) => v.id)
+    const totalVentas = (ventasData ?? []).reduce((acc: number, v: any) => acc + Number(v.total), 0)
+
+    // Sumar unidades vendidas
+    let unidades = 0
+    if (ventaIds.length > 0) {
+      const { data: detalleData } = await supabase
+        .from('venta_detalle')
+        .select('cantidad')
+        .in('venta_id', ventaIds)
+      unidades = (detalleData ?? []).reduce((acc: number, d: any) => acc + Number(d.cantidad), 0)
+    }
+
+    // Obtener monto_apertura para recalcular efectivo_esperado
+    const { data: sesionData } = await supabase
+      .from('caja_sesiones')
+      .select('monto_apertura')
+      .eq('id', cajaSesionId)
+      .single()
+
+    const montoApertura = Number(sesionData?.monto_apertura ?? 0)
+    const efectivoEsperado = montoApertura + totalVentas
+
+    const { error: updateErr } = await supabase
+      .from('cortes_caja')
+      .update({
+        total_ventas: Number(totalVentas.toFixed(2)),
+        total_efectivo: Number(totalVentas.toFixed(2)),
+        efectivo_esperado: Number(efectivoEsperado.toFixed(2)),
+        efectivo_contado: Number(efectivoEsperado.toFixed(2)),
+        observacion: `Recalculado — ${ventasData?.length ?? 0} ventas, ${unidades} unidades`,
+      })
+      .eq('id', corteId)
+
+    if (updateErr) {
+      setError(updateErr.message)
+      setLoading(false)
+      throw new Error(updateErr.message)
+    }
+
+    await loadCortes()
+    setLoading(false)
+  }
+
   return {
     cajaActual,
     cortes,
@@ -194,6 +255,7 @@ export function useCaja() {
     error,
     abrirCaja,
     cerrarCaja,
+    recalcularCorte,
     refetch: async () => {
       await Promise.all([loadCajaActual(), loadCortes()])
     },

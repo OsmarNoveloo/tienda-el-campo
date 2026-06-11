@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
 import { supabase } from '../../lib/supabaseClient'
-import { getLocalISOString } from '../../lib/dateUtils'
+import { getLocalISOString, formatDateTime, formatDate } from '../../lib/dateUtils'
 import type { Cliente, CreditoVenta, AbonoCredito } from '../../types/database'
 
 type ClienteRow = Cliente & { total_deuda: number }
@@ -384,7 +384,7 @@ export default function ClientesPage() {
                                 <div key={deuda.id} className="bg-white rounded-lg border border-gray-200 p-3 text-xs space-y-1">
                                   <div className="flex justify-between">
                                     <span className="font-medium text-gray-800">Venta: {deuda.venta_folio}</span>
-                                    <span className="text-gray-600">{new Date(deuda.fecha_credito).toLocaleDateString('es-MX')}</span>
+                                    <span className="text-gray-600">{formatDate(deuda.fecha_credito)}</span>
                                   </div>
                                   <div className="flex justify-between text-gray-600">
                                     <span>Total crédito:</span>
@@ -403,7 +403,7 @@ export default function ClientesPage() {
                                       <p className="font-semibold text-gray-700 mb-1">Abonos:</p>
                                       {deuda.abonos.map((abono) => (
                                         <div key={abono.id} className="flex justify-between text-gray-600">
-                                          <span>{new Date(abono.fecha_abono).toLocaleDateString('es-MX')}</span>
+                                          <span>{formatDate(abono.fecha_abono)}</span>
                                           <span>-${Number(abono.monto).toFixed(2)}</span>
                                         </div>
                                       ))}

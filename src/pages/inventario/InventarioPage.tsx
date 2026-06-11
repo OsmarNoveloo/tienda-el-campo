@@ -7,6 +7,7 @@ import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { useInventario } from '../../hooks/useInventario'
+import { formatDateTime } from '../../lib/dateUtils'
 import type { TipoMovimiento, Producto } from '../../types/database'
 import type { StockProducto } from '../../hooks/useInventario'
 
@@ -383,7 +384,7 @@ export default function InventarioPage() {
                     </td>
                     <td className="px-4 py-3 text-right font-medium">{Number(mov.cantidad).toLocaleString('es-ES', { maximumFractionDigits: 3 })}</td>
                     <td className="px-4 py-3 text-gray-600">{mov.usuario_nombre}</td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">{new Date(mov.fecha_movimiento).toLocaleString('es-ES')}</td>
+                    <td className="px-4 py-3 text-gray-600 text-xs">{formatDateTime(mov.fecha_movimiento)}</td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{mov.observacion ?? '—'}</td>
                   </tr>
                 ))}

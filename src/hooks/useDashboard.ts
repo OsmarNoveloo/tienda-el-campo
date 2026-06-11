@@ -10,12 +10,18 @@ export type DashboardStats = {
   stockBajo: number
 }
 
+export type UltimaVentaProducto = {
+  nombre: string
+  cantidad: number
+}
+
 export type UltimaVenta = {
   id: number
   folio: string
   total: number
   usuario_nombre: string
   fecha_venta: string
+  productos: UltimaVentaProducto[]
 }
 
 export function useDashboard() {
@@ -176,6 +182,35 @@ export function useDashboard() {
         usuarioMap = new Map((usuariosData ?? []).map((u: any) => [u.id, u.nombre]))
       }
 
+      const ventaIds = (data ?? []).map((v: any) => v.id) as number[]
+
+      // Cargar detalle de productos para todas las ventas a la vez
+      let detalleMap = new Map<number, UltimaVentaProducto[]>()
+      if (ventaIds.length > 0) {
+        const { data: detalleData } = await supabase
+          .from('venta_detalle')
+          .select('venta_id, cantidad, producto_id')
+          .in('venta_id', ventaIds)
+
+        const productoIds = [...new Set((detalleData ?? []).map((d: any) => d.producto_id).filter(Boolean))]
+        let productosMap = new Map<number, string>()
+
+        if (productoIds.length > 0) {
+          const { data: productosData } = await supabase
+            .from('productos')
+            .select('id, nombre')
+            .in('id', productoIds)
+          productosMap = new Map((productosData ?? []).map((p: any) => [p.id, p.nombre]))
+        }
+
+        for (const detalle of (detalleData ?? [])) {
+          const d = detalle as any
+          const lista = detalleMap.get(d.venta_id) ?? []
+          lista.push({ nombre: productosMap.get(d.producto_id) ?? 'Adicional', cantidad: Number(d.cantidad) })
+          detalleMap.set(d.venta_id, lista)
+        }
+      }
+
       const mapped = (data ?? [])
         .map((row: any) => ({
           id: row.id,
@@ -183,6 +218,7 @@ export function useDashboard() {
           total: row.total,
           usuario_nombre: usuarioMap.get(row.usuario_id) ?? 'Sin usuario',
           fecha_venta: row.fecha_venta,
+          productos: detalleMap.get(row.id) ?? [],
         }))
         .sort((a, b) => {
           const fechaA = new Date(a.fecha_venta).getTime()

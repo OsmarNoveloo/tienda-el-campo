@@ -1,6 +1,7 @@
 import { LayoutDashboard, ShoppingCart, Receipt, TrendingUp, AlertCircle } from 'lucide-react'
 import { useDashboard } from '../hooks/useDashboard'
 import { useSystemConfig } from '../hooks/useSystemConfig'
+import { formatDateTime } from '../lib/dateUtils'
 
 export default function DashboardPage() {
   const { config } = useSystemConfig()
@@ -54,14 +55,24 @@ export default function DashboardPage() {
               {ultimasVentas.map((venta) => (
                 <div key={venta.id} className="px-6 py-4 hover:bg-gray-50 transition">
                   <div className="flex items-start justify-between gap-4">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-gray-800">{venta.folio}</p>
-                      <p className="text-xs text-gray-500 mt-1">{venta.usuario_nombre}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{venta.usuario_nombre}</p>
+                      {venta.productos.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {venta.productos.map((p, i) => (
+                            <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px]">
+                              <span className="font-medium">{p.cantidad}×</span>
+                              <span className="truncate max-w-32">{p.nombre}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <p className="text-sm font-semibold text-gray-800">${Number(venta.total).toFixed(2)}</p>
                       <p className="text-xs text-gray-500 mt-1">
-                        {new Date(venta.fecha_venta).toLocaleString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                        {formatDateTime(venta.fecha_venta)}
                       </p>
                     </div>
                   </div>

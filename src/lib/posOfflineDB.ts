@@ -3,7 +3,7 @@ import type { Producto } from '../types/database'
 export type ClienteCacheItem = {
   id: number
   nombre: string
-  limite_credito: number | null
+  saldo_deuda: number
 }
 
 export type PendingVenta = {
@@ -125,17 +125,21 @@ export async function countPendingVentas(): Promise<number> {
 }
 
 // Caja cache — localStorage es suficiente para un objeto pequeño
-export function saveCajaToCache(caja: { id: number; monto_apertura: number } | null): void {
+export function saveCajaToCache(caja: { id: number; monto_apertura: number; fecha_apertura: string } | null): void {
   try {
     if (caja) localStorage.setItem('pos_caja_cache', JSON.stringify(caja))
     else localStorage.removeItem('pos_caja_cache')
   } catch { /* ignore */ }
 }
 
-export function getCajaFromCache(): { id: number; monto_apertura: number } | null {
+export function getCajaFromCache(): { id: number; monto_apertura: number; fecha_apertura: string } | null {
   try {
     const raw = localStorage.getItem('pos_caja_cache')
-    return raw ? (JSON.parse(raw) as { id: number; monto_apertura: number }) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { id: number; monto_apertura: number; fecha_apertura?: string }
+    // Si el caché no tiene fecha_apertura (versión anterior) no es útil para calcular el rango correcto
+    if (!parsed.fecha_apertura) return null
+    return parsed as { id: number; monto_apertura: number; fecha_apertura: string }
   } catch {
     return null
   }

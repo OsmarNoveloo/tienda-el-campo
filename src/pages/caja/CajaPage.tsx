@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Banknote, Plus, Lock, AlertCircle, CheckCircle } from 'lucide-react'
+import { Banknote, Plus, Lock, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -7,6 +7,7 @@ import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabaseClient'
 import { useCaja } from '../../hooks/useCaja'
+import { formatDateTime } from '../../lib/dateUtils'
 import type { Usuario } from '../../types/database'
 
 const abrirSchema = z.object({
@@ -32,7 +33,8 @@ export default function CajaPage() {
   const [modalCerrarOpen, setModalCerrarOpen] = useState(false)
   const [usuarios, setUsuarios] = useState<Usuario[]>([])
 
-  const { cajaActual, cortes, loading, error, abrirCaja, cerrarCaja, refetch } = useCaja()
+  const { cajaActual, cortes, loading, error, abrirCaja, cerrarCaja, recalcularCorte, refetch } = useCaja()
+  const [recalculandoId, setRecalculandoId] = useState<number | null>(null)
 
   const {
     register: registerAbrir,
@@ -165,7 +167,7 @@ export default function CajaPage() {
             <p className="text-xs font-medium text-gray-600 uppercase">Abierta por</p>
             <p className="text-lg font-semibold text-gray-800 mt-1">{cajaActual.usuario_nombre}</p>
             <p className="text-xs text-gray-500 mt-2">
-              {new Date(cajaActual.fecha_apertura).toLocaleString('es-ES')}
+              {formatDateTime(cajaActual.fecha_apertura)}
             </p>
           </div>
           <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4">
@@ -232,7 +234,7 @@ export default function CajaPage() {
             <div className="flex justify-between">
               <span className="text-gray-600">Apertura:</span>
               <span className="font-medium text-gray-800">
-                {new Date(cajaActual.fecha_apertura).toLocaleString('es-ES')}
+                {formatDateTime(cajaActual.fecha_apertura)}
               </span>
             </div>
             <div className="flex justify-between pt-2 border-t border-gray-100">
@@ -267,6 +269,7 @@ export default function CajaPage() {
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">Efectivo</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">Tarjeta</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Fecha</th>
+                  <th className="px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -281,12 +284,35 @@ export default function CajaPage() {
                     <td className="px-4 py-3 text-right text-blue-600 font-medium">
                       ${Number(corte.total_tarjeta).toFixed(2)}
                     </td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">{new Date(corte.fecha_corte).toLocaleString('es-ES')}</td>
+                    <td className="px-4 py-3 text-gray-600 text-xs">
+                      {formatDateTime(corte.fecha_corte)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={async () => {
+                          setRecalculandoId(corte.id)
+                          try {
+                            await recalcularCorte(corte.id, corte.caja_sesion_id)
+                            toast.success(`Corte #${corte.id} recalculado correctamente`)
+                          } catch (e) {
+                            toast.error(e instanceof Error ? e.message : 'Error al recalcular')
+                          } finally {
+                            setRecalculandoId(null)
+                          }
+                        }}
+                        disabled={recalculandoId === corte.id}
+                        title="Recalcular con las ventas reales de esta sesión"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        <RefreshCw size={11} className={recalculandoId === corte.id ? 'animate-spin' : ''} />
+                        {recalculandoId === corte.id ? 'Calculando...' : 'Recalcular'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {!cortes.length && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                    <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
                       No hay cortes registrados.
                     </td>
                   </tr>
