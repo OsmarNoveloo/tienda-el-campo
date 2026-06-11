@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
 import { supabase } from '../../lib/supabaseClient'
-import { getLocalISOString, formatDateTime, formatDate } from '../../lib/dateUtils'
+import { getLocalISOString, formatDate } from '../../lib/dateUtils'
 import type { Cliente, CreditoVenta, AbonoCredito } from '../../types/database'
 
 type ClienteRow = Cliente & { total_deuda: number }
