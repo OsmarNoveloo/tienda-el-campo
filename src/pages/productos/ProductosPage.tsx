@@ -68,6 +68,7 @@ export default function ProductosPage() {
     const codigoBarras = values.codigo_barras?.trim()
     if (codigoBarras) {
       const existeCodigo = productos.some((producto) => {
+        if (!producto.activo) return false
         if (producto.id === productoEditar?.id) return false
         return producto.codigo_barras?.trim() === codigoBarras
       })

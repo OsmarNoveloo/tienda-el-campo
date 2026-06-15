@@ -274,6 +274,7 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
               </div>
               <input
                 {...register('codigo_barras')}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="0000000000000"
               />

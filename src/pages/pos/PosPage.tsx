@@ -101,6 +101,11 @@ export default function PosPage() {
     isRapidSequence: true,
     prevValue: '',
   })
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const barcodeBufferRef = useRef('')
+  const barcodeLastKeyRef = useRef(0)
+  const barcodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const globalKeyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {})
 
   const subtotal = useMemo(
     () => carrito.reduce((acc, item) => acc + Number(item.producto.precio_actual) * item.cantidad, 0),
@@ -461,6 +466,13 @@ export default function PosPage() {
     return () => clearInterval(interval)
   }, [SUMMARY_POLL_MS, config.pauseRefreshOnHiddenTab, loadSummary])
 
+  // Listener global de teclado — actualizado en cada render para tener closures frescos
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => globalKeyHandlerRef.current(e)
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [])
+
   const addToCart = (producto: Producto) => {
     setCarrito((prev) => {
       const existing = prev.find((item) => item.producto.id === producto.id)
@@ -734,6 +746,63 @@ export default function PosPage() {
     setHaciendoCorte(false)
   }
 
+  // Actualizar ref en cada render para capturar closures actuales
+  globalKeyHandlerRef.current = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement
+
+    // ESC: finalizar venta (excepto en selects donde cierra el dropdown)
+    if (e.key === 'Escape') {
+      if (target.tagName === 'SELECT') return
+      e.preventDefault()
+      finalizarVenta()
+      return
+    }
+
+    // Si ya hay un input de texto enfocado, no interceptar — el input maneja el tecleo
+    const isTypingInput =
+      (target.tagName === 'INPUT' &&
+        !['button', 'submit', 'checkbox', 'radio'].includes((target as HTMLInputElement).type)) ||
+      target.tagName === 'TEXTAREA'
+
+    if (isTypingInput) return
+
+    // Acumular caracteres del lector de barras (llegan en ráfaga < 100 ms entre cada uno)
+    if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const now = Date.now()
+      const delta = barcodeLastKeyRef.current === 0 ? 0 : now - barcodeLastKeyRef.current
+      if (delta > 100) barcodeBufferRef.current = ''
+      barcodeLastKeyRef.current = now
+      barcodeBufferRef.current += e.key
+
+      if (barcodeTimerRef.current) clearTimeout(barcodeTimerRef.current)
+      barcodeTimerRef.current = setTimeout(() => {
+        const code = barcodeBufferRef.current.trim()
+        barcodeBufferRef.current = ''
+        barcodeLastKeyRef.current = 0
+        if (code.length >= 4 && !tryAddByBarcode(code)) {
+          setSearch(code)
+          searchInputRef.current?.focus()
+        }
+      }, 80)
+      return
+    }
+
+    // Enter: intentar código inmediatamente (los lectores envían Enter al final)
+    if (e.key === 'Enter') {
+      if (barcodeTimerRef.current) {
+        clearTimeout(barcodeTimerRef.current)
+        barcodeTimerRef.current = null
+      }
+      const code = barcodeBufferRef.current.trim()
+      barcodeBufferRef.current = ''
+      barcodeLastKeyRef.current = 0
+      if (code.length >= 4 && !tryAddByBarcode(code)) {
+        setSearch(code)
+        searchInputRef.current?.focus()
+      }
+    }
+  }
+
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-6">
       <div className="space-y-3">
@@ -825,6 +894,7 @@ export default function PosPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 <input
+                  ref={searchInputRef}
                   value={search}
                   onChange={(e) => handleSearchChange(e.target.value)}
                   onKeyDown={(e) => {
@@ -846,7 +916,7 @@ export default function PosPage() {
                   value={productoRapidoPrecio}
                   onChange={(event) => setProductoRapidoPrecio(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === 'Escape' || event.key === 'Esc') {
+                    if (event.key === 'Enter') {
                       event.preventDefault()
                       addQuickItemToCart()
                     }
