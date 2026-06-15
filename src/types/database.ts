@@ -42,6 +42,24 @@ export interface Proveedor {
   direccion?: string | null
   activo: boolean
   creado_en: string
+  dias_visita?: number[] | null
+}
+
+export interface ProveedorPago {
+  id: number
+  proveedor_id: number
+  fecha: string
+  monto: number
+  notas?: string | null
+  creado_en: string
+}
+
+export interface ProveedorPedido {
+  id: number
+  proveedor_id: number
+  fecha: string
+  pedido: string
+  creado_en: string
 }
 
 export interface UnidadMedida {
