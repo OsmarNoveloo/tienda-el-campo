@@ -46,11 +46,6 @@ const PRODUCTOS_FETCH_CHUNK = 1000
 const PRODUCTOS_PAGE_SIZE = 20
 const SALE_TIMEOUT_MS = 4000 // si Supabase no responde en 4s, encolar offline
 
-function getTodayStartISO() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return getLocalISOString(date);
-}
 
 function generateFolio() {
   const now = new Date()
@@ -300,45 +295,27 @@ export default function PosPage() {
   }, [])
 
   const loadSummary = useCallback(async () => {
-    // Usar fecha_apertura de la caja activa para que al cambiar de día sin hacer corte
-    // las ventas de la sesión anterior sigan contando en el resumen
-    const startISO = cajaAbierta?.fecha_apertura ?? getTodayStartISO()
-
-    const { data: ventasGlobalesData, error: ventasGlobalesError } = await supabase
-      .from('ventas')
-      .select('total')
-      .eq('estado', 'PAGADA')
-      .gte('fecha_venta', startISO)
-
-    if (ventasGlobalesError) {
-      toast.error(`Error cargando total global del dia: ${ventasGlobalesError.message}`)
-      setSummary(initialSummary)
-      return
-    }
-
-    const montoTotalDia = (ventasGlobalesData ?? []).reduce((acc, row) => acc + Number(row.total), 0)
-
     if (!cajaAbierta) {
-      setSummary({ ...initialSummary, montoTotalDia })
+      setSummary(prev => ({ ...prev, ventasHoy: 0, montoHoy: 0, montoTotalDia: 0, unidadesVendidasHoy: 0 }))
       return
     }
 
     const { data: ventasData, error: ventasError } = await supabase
       .from('ventas')
-      .select('id,total')
-      .eq('estado', 'PAGADA')
+      .select('id, total, estado')
       .eq('caja_sesion_id', cajaAbierta.id)
-      .gte('fecha_venta', startISO)
 
     if (ventasError) {
-      toast.error(`Error cargando ventas del dia: ${ventasError.message}`)
-      setSummary({ ...initialSummary, montoTotalDia })
+      toast.error(`Error cargando ventas: ${ventasError.message}`)
       return
     }
 
-    const ventasHoy = ventasData?.length ?? 0
-    const montoHoy = (ventasData ?? []).reduce((acc, row) => acc + Number(row.total), 0)
-    const ventaIds = (ventasData ?? []).map((v) => v.id)
+    const ventas = ventasData ?? []
+    const ventasPagadas = ventas.filter((v: any) => v.estado === 'PAGADA')
+    const ventasHoy = ventasPagadas.length
+    const montoHoy = ventasPagadas.reduce((acc: number, v: any) => acc + Number(v.total), 0)
+    const montoTotalDia = ventas.reduce((acc: number, v: any) => acc + Number(v.total), 0)
+    const ventaIds = ventasPagadas.map((v: any) => v.id)
 
     if (ventaIds.length === 0) {
       setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy: 0 })
@@ -351,12 +328,12 @@ export default function PosPage() {
       .in('venta_id', ventaIds)
 
     if (detalleError) {
-      toast.error(`Error cargando detalle del dia: ${detalleError.message}`)
+      toast.error(`Error cargando detalle: ${detalleError.message}`)
       setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy: 0 })
       return
     }
 
-    const unidadesVendidasHoy = (detalleData ?? []).reduce((acc, row) => acc + Number(row.cantidad), 0)
+    const unidadesVendidasHoy = (detalleData ?? []).reduce((acc: number, row: any) => acc + Number(row.cantidad), 0)
     setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy })
   }, [cajaAbierta])
 
@@ -408,7 +385,7 @@ export default function PosPage() {
   useEffect(() => {
     if (cajaAbierta === null && cajaLoading === false) {
       setCarrito([])
-      setSummary(initialSummary)
+      setSummary(prev => ({ ...prev, ventasHoy: 0, montoHoy: 0, unidadesVendidasHoy: 0 }))
     }
   }, [cajaAbierta, cajaLoading])
 
