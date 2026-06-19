@@ -58,7 +58,7 @@ export function useInventario() {
     }
   }, [config.inventarioMovimientosLimit])
 
-  const crearMovimiento = async (payload: {
+  const crearMovimiento = useCallback(async (payload: {
     producto_id: number
     usuario_id: number
     tipo: TipoMovimiento
@@ -70,25 +70,24 @@ export function useInventario() {
   }) => {
     await api.post('/inventario/movimientos', payload)
     await loadMovimientos()
-  }
+  }, [loadMovimientos])
 
-  const loadStockActual = async (): Promise<StockProducto[]> => {
+  const loadStockActual = useCallback((): Promise<StockProducto[]> => {
     return api.get<StockProducto[]>('/inventario/stock')
-  }
+  }, [])
 
-  const loadStockPage = async ({ page, pageSize, search }: StockPageParams): Promise<StockPageResult> => {
+  const loadStockPage = useCallback(({ page, pageSize, search }: StockPageParams): Promise<StockPageResult> => {
     const params = new URLSearchParams({
       page: String(page),
       pageSize: String(pageSize),
       ...(search ? { search } : {}),
     })
     return api.get<StockPageResult>(`/inventario/stock/page?${params}`)
-  }
+  }, [])
 
-  const loadStockLowCount = async (): Promise<number> => {
-    const { count } = await api.get<{ count: number }>('/inventario/stock/bajo')
-    return count
-  }
+  const loadStockLowCount = useCallback((): Promise<number> => {
+    return api.get<{ count: number }>('/inventario/stock/bajo').then(({ count }) => count)
+  }, [])
 
   useEffect(() => {
     loadMovimientos()
