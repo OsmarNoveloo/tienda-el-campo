@@ -4,8 +4,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
-import { supabase } from '../../lib/supabaseClient'
-import { getLocalISOString, formatDate } from '../../lib/dateUtils'
+import { api } from '../../lib/apiClient'
+import { formatDate } from '../../lib/dateUtils'
 import type { Cliente, CreditoVenta, AbonoCredito } from '../../types/database'
 
 type ClienteRow = Cliente & { total_deuda: number }
@@ -60,52 +60,12 @@ export default function ClientesPage() {
     setLoading(true)
     setError(null)
     try {
-      const from = (currentPage - 1) * pageSize
-      const to = from + pageSize - 1
-
-      let query = supabase
-        .from('clientes')
-        .select('*', { count: 'exact' })
-
       const term = deferredSearchTerm.trim()
-      if (term) {
-        query = query.or(`nombre.ilike.%${term}%,telefono.ilike.%${term}%`)
-      }
-
-      const { data, error: err, count } = await query
-        .order('nombre')
-        .range(from, to)
-
-      if (err) throw err
-
-      setTotalCount(count ?? 0)
-
-      const pageClientes = (data ?? []) as Cliente[]
-      const clienteIds = pageClientes.map((cliente) => cliente.id)
-
-      let deudaPorCliente = new Map<number, number>()
-      if (clienteIds.length > 0) {
-        const { data: creditos, error: credErr } = await supabase
-          .from('creditos_ventas')
-          .select('cliente_id,saldo_pendiente')
-          .in('cliente_id', clienteIds)
-          .neq('estado', 'PAGADO')
-
-        if (credErr) throw credErr
-
-        deudaPorCliente = (creditos ?? []).reduce((acc, credito: any) => {
-          const current = acc.get(credito.cliente_id) ?? 0
-          acc.set(credito.cliente_id, current + Number(credito.saldo_pendiente))
-          return acc
-        }, new Map<number, number>())
-      }
-      
-      const clientesConDeuda: ClienteRow[] = pageClientes.map((cliente) => ({
-        ...cliente,
-        total_deuda: deudaPorCliente.get(cliente.id) ?? 0,
-      }))
-
-      setClientes(clientesConDeuda)
+      const params = new URLSearchParams({ page: String(currentPage), pageSize: String(pageSize) })
+      if (term) params.set('search', term)
+      const { items, total } = await api.get<{ items: ClienteRow[]; total: number }>(`/clientes?${params}`)
+      setClientes(items)
+      setTotalCount(total)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Error cargando clientes'
       setError(msg)
@@ -117,36 +77,7 @@ export default function ClientesPage() {
 
   const loadDeudasCliente = useCallback(async (clienteId: number) => {
     try {
-      const { data: creditos, error: credErr } = await supabase
-        .from('creditos_ventas')
-        .select('id, venta_id, cliente_id, usuario_id, fecha_credito, total_credito, saldo_pendiente, estado')
-        .eq('cliente_id', clienteId)
-        .neq('estado', 'PAGADO')
-        .order('fecha_credito', { ascending: false })
-      
-      if (credErr) throw credErr
-      
-      const deudas: DeudaDetalle[] = []
-      for (const credito of (creditos ?? [])) {
-        // Cargar detalles de venta y usuario
-        const [ventaRes, usuarioRes, abonasRes] = await Promise.all([
-          supabase.from('ventas').select('folio').eq('id', credito.venta_id).single(),
-          supabase.from('usuarios').select('nombre').eq('id', credito.usuario_id).single(),
-          supabase.from('abonos_credito').select('*').eq('credito_id', credito.id).order('fecha_abono', { ascending: false })
-        ])
-        
-        const venta_folio = ventaRes.data?.folio ?? 'N/A'
-        const usuario_nombre = usuarioRes.data?.nombre ?? 'Sin usuario'
-        const abonos = (abonasRes.data ?? []) as AbonoCredito[]
-        
-        deudas.push({
-          ...credito,
-          usuario_nombre,
-          venta_folio,
-          abonos,
-        })
-      }
-      
+      const deudas = await api.get<DeudaDetalle[]>(`/clientes/${clienteId}/deudas`)
       const newMap = new Map(deudasMap)
       newMap.set(clienteId, deudas)
       setDeudasMap(newMap)
@@ -207,31 +138,18 @@ export default function ClientesPage() {
 
   const submitForm = async (values: FormOutput) => {
     try {
+      const payload = {
+        nombre: values.nombre,
+        telefono: values.telefono || null,
+        direccion: values.direccion || null,
+        limite_credito: values.limite_credito || null,
+        activo: values.activo,
+      }
       if (editing) {
-        const { error } = await supabase
-          .from('clientes')
-          .update({
-            nombre: values.nombre,
-            telefono: values.telefono || null,
-            direccion: values.direccion || null,
-            limite_credito: values.limite_credito || null,
-            activo: values.activo,
-          })
-          .eq('id', editing.id)
-        if (error) throw error
+        await api.put(`/clientes/${editing.id}`, payload)
         toast.success('Cliente actualizado')
       } else {
-        const { error } = await supabase.from('clientes').insert([
-          {
-            nombre: values.nombre,
-            telefono: values.telefono || null,
-            direccion: values.direccion || null,
-            limite_credito: values.limite_credito || null,
-            activo: values.activo,
-            creado_en: getLocalISOString(),
-          },
-        ])
-        if (error) throw error
+        await api.post('/clientes', payload)
         toast.success('Cliente creado')
       }
       setModalOpen(false)
@@ -244,11 +162,7 @@ export default function ClientesPage() {
 
   const toggleEstado = async (cliente: ClienteRow) => {
     try {
-      const { error } = await supabase
-        .from('clientes')
-        .update({ activo: !cliente.activo })
-        .eq('id', cliente.id)
-      if (error) throw error
+      await api.put(`/clientes/${cliente.id}`, { activo: !cliente.activo })
       toast.success(`Cliente ${!cliente.activo ? 'activado' : 'desactivado'}`)
       await loadClientes()
     } catch (e) {

@@ -81,6 +81,11 @@ export function useCaja() {
     loadCortes()
   }, [loadCajaActual, loadCortes])
 
+  const refetch = useCallback(
+    () => Promise.all([loadCajaActual(), loadCortes()]),
+    [loadCajaActual, loadCortes],
+  )
+
   return {
     cajaActual,
     cortes,
@@ -89,6 +94,6 @@ export function useCaja() {
     abrirCaja,
     cerrarCaja,
     recalcularCorte,
-    refetch: async () => { await Promise.all([loadCajaActual(), loadCortes()]) },
+    refetch,
   }
 }

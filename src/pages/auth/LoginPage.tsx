@@ -3,8 +3,7 @@ import { useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
-import { supabase } from '../../lib/supabaseClient'
-import { sha256Hex } from '../../lib/security'
+import { api } from '../../lib/apiClient'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -45,47 +44,23 @@ export default function LoginPage() {
     }
 
     setRecoveryLoading(true)
-
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('id')
-      .eq('usuario', recoveryUser.trim())
-      .eq('email', recoveryEmail.trim())
-      .eq('estado', 'ACTIVO')
-      .maybeSingle()
-
-    if (error) {
+    try {
+      await api.post('/auth/recovery', {
+        usuario: recoveryUser.trim(),
+        email: recoveryEmail.trim(),
+        newPassword,
+      })
+      toast.success('Contraseña actualizada. Ya puedes iniciar sesion.')
+      setRecoveryOpen(false)
+      setRecoveryUser('')
+      setRecoveryEmail('')
+      setNewPassword('')
+      setConfirmPassword('')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al restablecer contraseña')
+    } finally {
       setRecoveryLoading(false)
-      toast.error(error.message)
-      return
     }
-
-    if (!data) {
-      setRecoveryLoading(false)
-      toast.error('No se encontro un usuario activo con esos datos')
-      return
-    }
-
-    const password_hash = await sha256Hex(newPassword)
-
-    const { error: updateError } = await supabase
-      .from('usuarios')
-      .update({ password_hash })
-      .eq('id', data.id)
-
-    setRecoveryLoading(false)
-
-    if (updateError) {
-      toast.error(updateError.message)
-      return
-    }
-
-    toast.success('Contraseña actualizada. Ya puedes iniciar sesion.')
-    setRecoveryOpen(false)
-    setRecoveryUser('')
-    setRecoveryEmail('')
-    setNewPassword('')
-    setConfirmPassword('')
   }
 
   if (isAuthenticated) {

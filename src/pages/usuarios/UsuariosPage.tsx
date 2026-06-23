@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { getLocalISOString } from '../../lib/dateUtils'
 import { ShieldUser, Plus, Pencil, UserCheck, UserX, X } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
-import { sha256Hex } from '../../lib/security'
-import { supabase } from '../../lib/supabaseClient'
+import { api } from '../../lib/apiClient'
 
 type RolOption = {
   id: number
@@ -75,48 +73,41 @@ export default function UsuariosPage() {
   const loadRoles = useCallback(async () => {
     setRolesLoading(true)
     setRolesError(null)
-    const { data, error } = await supabase.from('roles').select('id,nombre').order('nombre')
-    if (error) {
-      setRolesError(error.message)
-      toast.error(`Error cargando roles: ${error.message}`)
+    try {
+      const data = await api.get<RolOption[]>('/usuarios/roles')
+      setRoles(data)
+      if (!data.length) setRolesError('No hay roles registrados.')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Error cargando roles'
+      setRolesError(msg)
+      toast.error(msg)
       setRoles([])
+    } finally {
       setRolesLoading(false)
-      return
     }
-    setRoles((data ?? []) as RolOption[])
-    if (!data?.length) {
-      setRolesError('No hay roles visibles para este usuario. Revisa politicas RLS de la tabla roles.')
-    }
-    setRolesLoading(false)
   }, [])
 
   const loadUsuarios = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('id,rol_id,nombre,usuario,telefono,email,estado,creado_en,roles(nombre)')
-      .order('creado_en', { ascending: false })
-
-    if (error) {
-      toast.error(`Error cargando usuarios: ${error.message}`)
+    try {
+      const data = await api.get<any[]>('/usuarios')
+      const mapped = data.map((row: any) => ({
+        id: row.id,
+        rol_id: row.rol_id,
+        nombre: row.nombre,
+        usuario: row.usuario,
+        telefono: row.telefono,
+        email: row.email,
+        estado: row.estado,
+        creado_en: row.creado_en,
+        rol_nombre: Array.isArray(row.roles) ? (row.roles[0]?.nombre ?? 'Sin rol') : (row.roles?.nombre ?? 'Sin rol'),
+      }))
+      setUsuarios(mapped)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error cargando usuarios')
+    } finally {
       setLoading(false)
-      return
     }
-
-    const mapped = (data ?? []).map((row: any) => ({
-      id: row.id,
-      rol_id: row.rol_id,
-      nombre: row.nombre,
-      usuario: row.usuario,
-      telefono: row.telefono,
-      email: row.email,
-      estado: row.estado,
-      creado_en: row.creado_en,
-      rol_nombre: row.roles?.nombre ?? 'Sin rol',
-    }))
-
-    setUsuarios(mapped)
-    setLoading(false)
   }, [])
 
   useEffect(() => {
@@ -156,71 +147,53 @@ export default function UsuariosPage() {
   }
 
   const submitForm = async (values: FormOutput) => {
-    if (editing) {
-      const updatePayload: Record<string, unknown> = {
-        rol_id: values.rol_id,
-        nombre: values.nombre,
-        usuario: values.usuario,
-        telefono: values.telefono || null,
-        email: values.email || null,
-        estado: values.estado,
+    try {
+      if (editing) {
+        const payload: Record<string, unknown> = {
+          rol_id: values.rol_id,
+          nombre: values.nombre,
+          usuario: values.usuario,
+          telefono: values.telefono || null,
+          email: values.email || null,
+          estado: values.estado,
+        }
+        if (values.password && values.password.trim()) payload.password = values.password
+        await api.put(`/usuarios/${editing.id}`, payload)
+        toast.success('Usuario actualizado')
+        setModalOpen(false)
+        setEditing(null)
+      } else {
+        if (!values.password || values.password.trim().length < 6) {
+          toast.error('La contraseña es requerida para crear usuario')
+          return
+        }
+        await api.post('/usuarios', {
+          rol_id: values.rol_id,
+          nombre: values.nombre,
+          usuario: values.usuario,
+          password: values.password,
+          telefono: values.telefono || null,
+          email: values.email || null,
+          estado: values.estado,
+        })
+        toast.success('Usuario creado')
+        setModalOpen(false)
       }
-
-      if (values.password && values.password.trim()) {
-        updatePayload.password_hash = await sha256Hex(values.password)
-      }
-
-      const { error } = await supabase.from('usuarios').update(updatePayload).eq('id', editing.id)
-      if (error) {
-        toast.error(error.message)
-        return
-      }
-
-      toast.success('Usuario actualizado')
-      setModalOpen(false)
-      setEditing(null)
       await loadUsuarios()
-      return
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al guardar')
     }
-
-    if (!values.password || values.password.trim().length < 6) {
-      toast.error('La contrasena es requerida para crear usuario')
-      return
-    }
-
-    const password_hash = await sha256Hex(values.password)
-    const { error } = await supabase.from('usuarios').insert([
-      {
-        rol_id: values.rol_id,
-        nombre: values.nombre,
-        usuario: values.usuario,
-        password_hash,
-        telefono: values.telefono || null,
-        email: values.email || null,
-        estado: values.estado,
-        creado_en: getLocalISOString(),
-      },
-    ])
-
-    if (error) {
-      toast.error(error.message)
-      return
-    }
-
-    toast.success('Usuario creado')
-    setModalOpen(false)
-    await loadUsuarios()
   }
 
   const toggleEstado = async (user: UsuarioRow) => {
     const next = user.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO'
-    const { error } = await supabase.from('usuarios').update({ estado: next }).eq('id', user.id)
-    if (error) {
-      toast.error(error.message)
-      return
+    try {
+      await api.put(`/usuarios/${user.id}`, { estado: next })
+      toast.success(`Usuario ${next.toLowerCase()}`)
+      await loadUsuarios()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al cambiar estado')
     }
-    toast.success(`Usuario ${next.toLowerCase()}`)
-    await loadUsuarios()
   }
 
   return (
