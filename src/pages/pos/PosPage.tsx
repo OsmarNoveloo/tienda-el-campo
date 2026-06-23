@@ -1,5 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight, Truck } from 'lucide-react'
+import PosPagosProveedores from '../../components/pos/PosPagosProveedores'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { api } from '../../lib/apiClient'
@@ -94,6 +95,8 @@ export default function PosPage() {
   const [clienteCreditoId, setClienteCreditoId] = useState<number | ''>('')
   const [cajaAbierta, setCajaAbierta] = useState<CajaActual | null>(null)
   const [cajaLoading, setCajaLoading] = useState(true)
+  const [pagosProvOpen, setPagosProvOpen] = useState(false)
+  const [totalPagosProv, setTotalPagosProv] = useState(0)
   const cajaRequestInFlight = useRef(false)
   const searchTypingMeta = useRef({
     lastTs: 0,
@@ -253,6 +256,18 @@ export default function PosPage() {
     }
   }, [cajaAbierta])
 
+  const loadPagosProv = useCallback(async () => {
+    try {
+      const today = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+      const { pagos } = await api.get<{ pagos: { monto: number }[] }>(`/proveedores/semana?from=${todayStr}&to=${todayStr}`)
+      setTotalPagosProv(pagos.reduce((s, p) => s + Number(p.monto), 0))
+    } catch {
+      // mantiene el valor anterior si falla
+    }
+  }, [])
+
   const { isOnline, pendingCount, isSyncing, syncPendingVentas, refreshPendingCount } = usePosOfflineSync(loadSummary)
 
   const verificarCajaAbierta = useCallback(async (showLoading = false) => {
@@ -297,6 +312,7 @@ export default function PosPage() {
     loadClientes()
     loadProductos()
     verificarCajaAbierta(true)
+    void loadPagosProv()
   }, [])
 
   // Polling de caja en lugar de real-time
@@ -585,202 +601,211 @@ export default function PosPage() {
   }
 
   return (
-    <div className="p-3 sm:p-4 md:p-6 space-y-6">
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            <ShoppingCart className="text-indigo-600" size={24} />
-            <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
+    <div className="h-full flex flex-col overflow-hidden bg-gray-50">
+
+      {/* ── Barra superior compacta ── */}
+      <div className="shrink-0 px-3 sm:px-4 py-2 bg-white border-b border-gray-200 space-y-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <ShoppingCart className="text-indigo-600" size={20} />
+            <h1 className="text-lg font-bold text-gray-800">Punto de Venta</h1>
             {cajaLoading === false && (
-              cajaAbierta
-                ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                    Caja abierta
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-red-100 text-red-700">
-                    <AlertCircle size={11} className="shrink-0" />
-                    Sin caja — ve al módulo Caja
-                  </span>
-                )
+              cajaAbierta ? (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                  Caja abierta
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                  <AlertCircle size={10} className="shrink-0" />
+                  Sin caja
+                </span>
+              )
             )}
           </div>
-          <button
-            onClick={hacerCorte}
-            disabled={haciendoCorte || !cajaAbierta}
-            className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
-          >
-            <Wallet size={16} />
-            {haciendoCorte ? 'Generando corte...' : 'Hacer corte'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPagosProvOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+            >
+              <Truck size={14} />
+              <span className="hidden sm:inline">Proveedores</span>
+            </button>
+            <button
+              onClick={hacerCorte}
+              disabled={haciendoCorte || !cajaAbierta}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+            >
+              <Wallet size={14} />
+              {haciendoCorte ? 'Generando...' : 'Hacer corte'}
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
-          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
-            <p className="text-[11px] text-gray-500 uppercase">Apertura</p>
-            <p className="text-sm sm:text-base font-semibold text-gray-800">
-              ${Number(cajaAbierta?.monto_apertura ?? 0).toFixed(2)}
-            </p>
+        <div className="flex gap-2 overflow-x-auto pb-0.5">
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-20">
+            <p className="text-[10px] text-gray-500 uppercase font-medium">Apertura</p>
+            <p className="text-sm font-semibold text-gray-800">${Number(cajaAbierta?.monto_apertura ?? 0).toFixed(2)}</p>
           </div>
-          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
-            <p className="text-[11px] text-gray-500 uppercase">Ventas del dia</p>
-            <p className="text-sm sm:text-base font-semibold text-gray-800">{summary.ventasHoy}</p>
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-17.5">
+            <p className="text-[10px] text-gray-500 uppercase font-medium">Ventas</p>
+            <p className="text-sm font-semibold text-gray-800">{summary.ventasHoy}</p>
           </div>
-          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
-            <p className="text-[11px] text-gray-500 uppercase">Monto del dia</p>
-            <p className="text-sm sm:text-base font-semibold text-emerald-700">${summary.montoHoy.toFixed(2)}</p>
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-22.5">
+            <p className="text-[10px] text-gray-500 uppercase font-medium">Monto día</p>
+            <p className="text-sm font-semibold text-emerald-700">${summary.montoHoy.toFixed(2)}</p>
           </div>
-          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
-            <p className="text-[11px] text-gray-500 uppercase">Total global dia</p>
-            <p className="text-sm sm:text-base font-semibold text-blue-700">${summary.montoTotalDia.toFixed(2)}</p>
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-22.5">
+            <p className="text-[10px] text-gray-500 uppercase font-medium">Total global</p>
+            <p className="text-sm font-semibold text-blue-700">${summary.montoTotalDia.toFixed(2)}</p>
           </div>
-          <div className="bg-white rounded-lg border border-gray-100 px-3 py-2">
-            <p className="text-[11px] text-gray-500 uppercase">Unidades</p>
-            <p className="text-sm sm:text-base font-semibold text-indigo-700">
+          {cajaAbierta && (
+            <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-22.5">
+              <p className="text-[10px] text-gray-500 uppercase font-medium">Pagos prov.</p>
+              <p className="text-sm font-semibold text-rose-600">${totalPagosProv.toFixed(2)}</p>
+            </div>
+          )}
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-20">
+            <p className="text-[10px] text-gray-500 uppercase font-medium">Unidades</p>
+            <p className="text-sm font-semibold text-indigo-700">
               {summary.unidadesVendidasHoy.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
             </p>
           </div>
         </div>
+
+        {!isOnline && (
+          <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs">
+            <WifiOff size={13} className="text-amber-600 shrink-0" />
+            <span className="text-amber-800 font-medium">Sin conexión</span>
+            <span className="text-amber-700 hidden sm:inline">— ventas guardadas localmente.</span>
+          </div>
+        )}
+        {isOnline && pendingCount > 0 && (
+          <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 text-xs">
+            <span className="text-blue-800">{pendingCount} venta{pendingCount > 1 ? 's' : ''} pendiente{pendingCount > 1 ? 's' : ''}</span>
+            <button
+              onClick={() => void syncPendingVentas()}
+              disabled={isSyncing}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-60"
+            >
+              <RefreshCw size={11} className={isSyncing ? 'animate-spin' : ''} />
+              {isSyncing ? 'Sincronizando...' : 'Sincronizar'}
+            </button>
+          </div>
+        )}
       </div>
 
-      {!isOnline && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-2 text-sm">
-          <WifiOff size={15} className="text-amber-600 shrink-0" />
-          <span className="text-amber-800 font-medium">Sin conexión</span>
-          <span className="text-amber-700">— las ventas se guardan localmente y se sincronizan al recuperar internet.</span>
-        </div>
-      )}
+      {/* ── Contenido principal ── */}
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
 
-      {isOnline && pendingCount > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between gap-3 text-sm">
-          <span className="text-blue-800">
-            {pendingCount} venta{pendingCount > 1 ? 's' : ''} pendiente{pendingCount > 1 ? 's' : ''} de sincronizar
-          </span>
-          <button
-            onClick={() => void syncPendingVentas()}
-            disabled={isSyncing}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-60"
-          >
-            <RefreshCw size={12} className={isSyncing ? 'animate-spin' : ''} />
-            {isSyncing ? 'Sincronizando...' : 'Sincronizar ahora'}
-          </button>
-        </div>
-      )}
+        {/* Panel productos */}
+        <section className="flex-3 min-h-0 flex flex-col overflow-hidden border-b lg:border-b-0 lg:border-r border-gray-200 bg-white">
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <section className="xl:col-span-2 bg-white rounded-xl border border-gray-100 overflow-hidden">
-          <div className="p-4 border-b border-gray-100">
-            <div className="flex flex-col gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                <input
-                  ref={searchInputRef}
-                  value={search}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      void tryAddByBarcode(search)
+          {/* Búsqueda + adicional */}
+          <div className="shrink-0 p-3 border-b border-gray-100 space-y-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
+              <input
+                ref={searchInputRef}
+                value={search}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void tryAddByBarcode(search)
+                  }
+                }}
+                placeholder="Nombre, SKU o código de barras"
+                className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div className="flex gap-2">
+              <div className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 bg-gray-50 flex items-center truncate">
+                Adicional
+              </div>
+              <input
+                value={productoRapidoPrecio}
+                onChange={(event) => {
+                  const val = event.target.value
+                  const intPart = val.split('.')[0].replace('-', '')
+                  if (intPart.length > 5) {
+                    if (!tryAddByBarcode(val)) {
+                      setSearch(val)
+                      searchInputRef.current?.focus()
                     }
-                  }}
-                  placeholder="Buscar por nombre, SKU o codigo de barras"
-                  className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px_auto] gap-2">
-                <div className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-500 bg-gray-50 flex items-center">
-                  Adicional
-                </div>
-                <input
-                  value={productoRapidoPrecio}
-                  onChange={(event) => setProductoRapidoPrecio(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      addQuickItemToCart()
-                    }
-                  }}
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  placeholder="Precio"
-                />
-                <button
-                  type="button"
-                  onClick={addQuickItemToCart}
-                  className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-60"
-                >
-                  <Plus size={14} />
-                  Agregar rápido
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-gray-500">
-                  Solo ingresa el precio y presiona agregar. Se genera un código interno único para la venta.
-                </p>
-                {refreshingProductos && (
-                  <span className="inline-flex items-center gap-1 text-xs text-gray-400">
-                    <RefreshCw size={11} className="animate-spin" />
-                    Actualizando...
-                  </span>
-                )}
-              </div>
+                    return
+                  }
+                  setProductoRapidoPrecio(val)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    addQuickItemToCart()
+                  }
+                }}
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-24 shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Precio"
+              />
+              <button
+                type="button"
+                onClick={addQuickItemToCart}
+                className="shrink-0 inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+              >
+                <Plus size={14} />
+                <span className="hidden sm:inline">Agregar</span>
+              </button>
             </div>
           </div>
 
+          {/* Lista de productos */}
           {loading ? (
-            <div className="p-10 text-center text-sm text-gray-400">Cargando productos...</div>
+            <div className="flex-1 flex items-center justify-center text-sm text-gray-400">Cargando productos...</div>
           ) : (
             <>
-              <div className="divide-y divide-gray-50">
+              <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-50">
                 {productosPaginados.map((producto) => (
-                  <div key={producto.id} className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-gray-800">{producto.nombre}</p>
-                      <p className="text-xs text-gray-500">SKU: {producto.sku ?? 'N/A'} | Codigo: {producto.codigo_barras ?? 'N/A'}</p>
+                  <div key={producto.id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 transition-colors">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate leading-tight">{producto.nombre}</p>
+                      <p className="text-[11px] text-gray-400 truncate">{producto.codigo_barras ?? producto.sku ?? '—'}</p>
                     </div>
-                    <div className="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-3">
-                      <p className="font-semibold text-gray-800">${Number(producto.precio_actual).toFixed(2)}</p>
-                      <button
-                        onClick={() => addToCart(producto)}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
-                      >
-                        <Plus size={14} />
-                        Agregar
-                      </button>
-                    </div>
+                    <span className="text-sm font-semibold text-gray-700 shrink-0">${Number(producto.precio_actual).toFixed(2)}</span>
+                    <button
+                      onClick={() => addToCart(producto)}
+                      className="shrink-0 h-8 w-8 flex items-center justify-center rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                    >
+                      <Plus size={14} />
+                    </button>
                   </div>
                 ))}
                 {productosFiltrados.length === 0 && (
-                  <div className="p-8 text-center text-sm text-gray-400">No hay productos para mostrar.</div>
+                  <div className="flex items-center justify-center h-20 text-sm text-gray-400">No hay productos.</div>
                 )}
               </div>
 
               {productosFiltrados.length > 0 && (
-                <div className="px-4 py-2 border-t border-gray-100 flex items-center justify-between gap-2 text-xs text-gray-500">
-                  <span>{productosFiltrados.length} producto{productosFiltrados.length !== 1 ? 's' : ''}</span>
+                <div className="shrink-0 px-3 py-2 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+                  <span className="flex items-center gap-1">
+                    {refreshingProductos && <RefreshCw size={10} className="animate-spin" />}
+                    {productosFiltrados.length} productos
+                  </span>
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
                       onClick={() => setProductoPage((p) => Math.max(1, p - 1))}
                       disabled={productoPage <= 1}
                       className="h-7 w-7 inline-flex items-center justify-center rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
-                    >
-                      <ChevronLeft size={13} />
-                    </button>
-                    <span className="px-2">{productoPage}/{productosTotalPages}</span>
+                    ><ChevronLeft size={13} /></button>
+                    <span className="px-1">{productoPage}/{productosTotalPages}</span>
                     <button
                       type="button"
                       onClick={() => setProductoPage((p) => Math.min(productosTotalPages, p + 1))}
                       disabled={productoPage >= productosTotalPages}
                       className="h-7 w-7 inline-flex items-center justify-center rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-40"
-                    >
-                      <ChevronRight size={13} />
-                    </button>
+                    ><ChevronRight size={13} /></button>
                   </div>
                 </div>
               )}
@@ -788,34 +813,39 @@ export default function PosPage() {
           )}
         </section>
 
-        <section className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 flex items-center gap-2">
-            <ReceiptText size={18} className="text-indigo-600" />
-            <h2 className="text-base font-semibold text-gray-800">Venta actual</h2>
+        {/* Panel carrito */}
+        <section className="flex-2 min-h-0 flex flex-col overflow-hidden lg:w-72 xl:w-80 lg:flex-none bg-white">
+          <div className="shrink-0 px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+            <ReceiptText size={16} className="text-indigo-600" />
+            <h2 className="text-sm font-semibold text-gray-800">Venta actual</h2>
+            {carrito.length > 0 && (
+              <span className="ml-auto text-xs bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full">
+                {carrito.length}
+              </span>
+            )}
           </div>
 
-          <div className="max-h-105 overflow-auto divide-y divide-gray-50">
+          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-50">
             {carrito.map((item) => (
-              <div key={item.producto.id} className="p-4 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-gray-800">{item.producto.nombre}</p>
+              <div key={item.producto.id} className="px-3 py-2">
+                <div className="flex items-start justify-between gap-1">
+                  <p className="text-sm font-medium text-gray-800 leading-tight flex-1 min-w-0 truncate">{item.producto.nombre}</p>
                   <button
                     onClick={() => removeFromCart(item.producto.id)}
-                    className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50"
+                    className="p-0.5 rounded text-gray-400 hover:text-red-600 shrink-0 mt-0.5"
                     title="Eliminar"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={13} />
                   </button>
                 </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="inline-flex items-center rounded-lg border border-gray-200">
+                <div className="flex items-center justify-between mt-1.5">
+                  <div className="inline-flex items-center rounded border border-gray-200">
                     <button onClick={() => changeQty(item.producto.id, -1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
-                      <Minus size={14} />
+                      <Minus size={12} />
                     </button>
-                    <span className="px-3 text-sm">{item.cantidad}</span>
+                    <span className="px-2 text-xs font-medium">{item.cantidad}</span>
                     <button onClick={() => changeQty(item.producto.id, 1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
-                      <Plus size={14} />
+                      <Plus size={12} />
                     </button>
                   </div>
                   <p className="text-sm font-semibold text-gray-800">
@@ -824,49 +854,42 @@ export default function PosPage() {
                 </div>
               </div>
             ))}
-
             {!carrito.length && (
-              <div className="p-8 text-center text-sm text-gray-400">Agrega productos para iniciar la venta.</div>
+              <div className="flex items-center justify-center h-20 text-sm text-gray-400">Agrega productos.</div>
             )}
           </div>
 
-          <div className="p-4 border-t border-gray-100 space-y-2">
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-gray-600 uppercase">Tipo de cobro</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTipoCobro('CONTADO')}
-                  className={`py-2 rounded-lg text-xs font-semibold border ${tipoCobro === 'CONTADO' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                >
-                  Contado
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTipoCobro('CREDITO')}
-                  className={`py-2 rounded-lg text-xs font-semibold border ${tipoCobro === 'CREDITO' ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                >
-                  Crédito
-                </button>
-              </div>
-              {tipoCobro === 'CREDITO' && (
-                <select
-                  value={clienteCreditoId}
-                  onChange={(e) => setClienteCreditoId(e.target.value ? Number(e.target.value) : '')}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-                >
-                  <option value="">Seleccionar cliente...</option>
-                  {clientes.map((cliente) => (
-                    <option key={cliente.id} value={cliente.id}>
-                      {cliente.nombre}
-                      {cliente.saldo_deuda > 0 ? ` • Debe: $${Number(cliente.saldo_deuda).toFixed(2)}` : ' • Sin deuda'}
-                    </option>
-                  ))}
-                </select>
-              )}
+          <div className="shrink-0 p-3 border-t border-gray-100 space-y-2">
+            <p className="text-xs font-semibold text-gray-600 uppercase">Tipo de cobro</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setTipoCobro('CONTADO')}
+                className={`py-1.5 rounded-lg text-xs font-semibold border ${tipoCobro === 'CONTADO' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              >Contado</button>
+              <button
+                type="button"
+                onClick={() => setTipoCobro('CREDITO')}
+                className={`py-1.5 rounded-lg text-xs font-semibold border ${tipoCobro === 'CREDITO' ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              >Crédito</button>
             </div>
+            {tipoCobro === 'CREDITO' && (
+              <select
+                value={clienteCreditoId}
+                onChange={(e) => setClienteCreditoId(e.target.value ? Number(e.target.value) : '')}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+              >
+                <option value="">Seleccionar cliente...</option>
+                {clientes.map((cliente) => (
+                  <option key={cliente.id} value={cliente.id}>
+                    {cliente.nombre}
+                    {cliente.saldo_deuda > 0 ? ` • Debe: $${Number(cliente.saldo_deuda).toFixed(2)}` : ' • Sin deuda'}
+                  </option>
+                ))}
+              </select>
+            )}
             <div className="flex justify-between text-sm text-gray-600">
-              <span>Articulos</span>
+              <span>Artículos</span>
               <span>{totalItems}</span>
             </div>
             <div className="flex justify-between text-base font-semibold text-gray-900">
@@ -876,7 +899,7 @@ export default function PosPage() {
             <button
               onClick={finalizarVenta}
               disabled={!carrito.length || !cajaAbierta}
-              className="w-full mt-2 py-2.5 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50"
+              className="w-full py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
               title={!cajaAbierta ? 'Abre una caja para vender' : ''}
             >
               Finalizar venta
@@ -884,6 +907,10 @@ export default function PosPage() {
           </div>
         </section>
       </div>
+
+      {pagosProvOpen && (
+        <PosPagosProveedores onClose={() => { setPagosProvOpen(false); void loadPagosProv() }} />
+      )}
     </div>
   )
 }

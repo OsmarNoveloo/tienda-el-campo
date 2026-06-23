@@ -13,7 +13,7 @@ const schema = z.object({
   sku: z.string().optional(),
   descripcion: z.string().optional(),
   costo_actual: z.coerce.number().min(0, 'Debe ser mayor o igual a 0'),
-  precio_actual: z.coerce.number().min(0, 'Debe ser mayor o igual a 0'),
+  precio_actual: z.coerce.number().min(0.01, 'El precio es requerido'),
   stock_minimo: z.coerce.number().min(0, 'Debe ser mayor o igual a 0'),
   activo: z.boolean(),
 })
@@ -41,7 +41,7 @@ interface Props {
 
 export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
   "use no memo"
-  const { register, handleSubmit, reset, setValue, getValues, watch, formState: { errors, isSubmitting } } = useForm<FormValues, unknown, FormOutput>({
+  const { register, handleSubmit, reset, setValue, getValues, formState: { errors, isSubmitting, isValid } } = useForm<FormValues, unknown, FormOutput>({
     resolver: zodResolver(schema),
     mode: 'onChange',
     defaultValues: {
@@ -60,8 +60,7 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
   const [scannerError, setScannerError] = useState<string | null>(null)
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const scannerActiveRef = useRef(false)
-  const nombreActual = watch('nombre')
-  const canSubmit = nombreActual.trim().length > 0
+  const canSubmit = isValid
 
   useEffect(() => {
     if (producto) {
@@ -316,7 +315,7 @@ export default function ProductoForm({ producto, onClose, onSubmit }: Props) {
               {errors.costo_actual && <p className="text-red-500 text-xs mt-1">{errors.costo_actual.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Precio $</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Precio $ *</label>
               <input
                 {...register('precio_actual')}
                 type="number"

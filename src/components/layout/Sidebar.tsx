@@ -37,7 +37,7 @@ export default function Sidebar({
   const { canAccess } = useAccessControl()
 
   return (
-    <aside className={`${collapsed ? 'w-20' : 'w-60'} min-h-screen bg-gray-900 flex flex-col shrink-0 transition-all duration-200 ${className}`}>
+    <aside className={`${collapsed ? 'w-20' : 'w-60'} h-full bg-gray-900 flex flex-col shrink-0 transition-all duration-200 ${className}`}>
       {/* Brand */}
       <div className={`relative flex items-center justify-between ${collapsed ? 'px-2' : 'px-5'} py-5 border-b border-gray-700`}>
         <div className={`flex items-center min-w-0 ${collapsed ? '' : 'gap-3'}`}>
@@ -76,7 +76,7 @@ export default function Sidebar({
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 flex flex-col gap-1">
+      <nav className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 py-3 flex flex-col gap-0.5 scrollbar-none">
         {navItems
           .filter((item) => canAccess(item.section))
           .map(({ to, label, icon: Icon }) => (
@@ -86,7 +86,7 @@ export default function Sidebar({
               onClick={onNavigate}
               title={collapsed ? label : undefined}
               className={({ isActive }) =>
-                `group relative flex items-center ${collapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                `group relative flex items-center ${collapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-indigo-600 text-white'
                     : 'text-gray-400 hover:bg-gray-800 hover:text-white'

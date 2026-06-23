@@ -4,7 +4,7 @@ import { toast } from 'react-toastify'
 import { api } from '../../lib/apiClient'
 import type { Proveedor, ProveedorPago, ProveedorPedido } from '../../types/database'
 
-const DIAS_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+const DIAS_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 const MESES_LARGO = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre']
 
@@ -19,7 +19,7 @@ function getMondayOfWeek(offset: number): Date {
 
 function getWeekDates(offset: number): Date[] {
   const monday = getMondayOfWeek(offset)
-  return Array.from({ length: 6 }, (_, i) => {
+  return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday)
     d.setDate(monday.getDate() + i)
     return d
@@ -35,7 +35,7 @@ function toDateStr(d: Date): string {
 
 function weekLabel(dates: Date[]): string {
   const start = dates[0]
-  const end = dates[5]
+  const end = dates[6]
   if (start.getMonth() === end.getMonth()) {
     return `${start.getDate()}–${end.getDate()} ${MESES[start.getMonth()]} ${start.getFullYear()}`
   }
@@ -82,7 +82,7 @@ export default function ProveedoresSemana({ proveedores }: Props) {
   const loadWeekData = useCallback(async () => {
     const dates = getWeekDates(weekOffset)
     const from = toDateStr(dates[0])
-    const to   = toDateStr(dates[5])
+    const to   = toDateStr(dates[6])
     setLoading(true)
     try {
       const { pagos: pagosData, pedidos: pedidosData } = await api.get<{ pagos: ProveedorPago[]; pedidos: ProveedorPedido[] }>(
@@ -217,7 +217,7 @@ export default function ProveedoresSemana({ proveedores }: Props) {
       </div>
 
       {/* ── Grid semanal ─────────────────────────────────────── */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+      <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
         {weekDates.map((date, dayIdx) => {
           const dateStr = toDateStr(date)
           const isToday = dateStr === todayStr

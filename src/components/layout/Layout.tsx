@@ -39,7 +39,7 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex min-h-screen md:h-screen bg-gray-100 overflow-x-hidden">
+    <div className="flex h-screen overflow-hidden bg-gray-100">
       {desktopSidebarPinned && (
         <Sidebar
           className="hidden md:flex"
