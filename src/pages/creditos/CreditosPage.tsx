@@ -25,7 +25,7 @@ import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { api } from '../../lib/apiClient'
 import { formatDateTime, formatDate } from '../../lib/dateUtils'
 import { normalizeSearchText } from '../../lib/searchUtils'
-import type { CreditoVenta, EstadoCredito } from '../../types/database'
+import type { AbonoCredito, CreditoVenta, EstadoCredito } from '../../types/database'
 
 type CreditoEstadoNormalizado = EstadoCredito | 'PENDIENTE'
 
