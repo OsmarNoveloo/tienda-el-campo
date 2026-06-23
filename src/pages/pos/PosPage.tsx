@@ -604,84 +604,86 @@ export default function PosPage() {
     <div className="h-full flex flex-col overflow-hidden bg-gray-50">
 
       {/* ── Barra superior compacta ── */}
-      <div className="shrink-0 px-3 sm:px-4 py-2 bg-white border-b border-gray-200 space-y-2">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2 flex-wrap">
-            <ShoppingCart className="text-indigo-600" size={20} />
-            <h1 className="text-lg font-bold text-gray-800">Punto de Venta</h1>
+      <div className="shrink-0 px-3 sm:px-4 py-1.5 bg-white border-b border-gray-200 space-y-1.5">
+        {/* Fila 1: título + badge + botones (sin scroll) */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <ShoppingCart className="text-indigo-600 shrink-0" size={14} />
+            <h1 className="text-[10px] font-semibold text-gray-400 shrink-0 uppercase tracking-wide">Punto de Venta</h1>
             {cajaLoading === false && (
               cajaAbierta ? (
-                <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                   Caja abierta
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
-                  <AlertCircle size={10} className="shrink-0" />
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 shrink-0">
+                  <AlertCircle size={9} className="shrink-0" />
                   Sin caja
                 </span>
               )
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={() => setPagosProvOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
             >
-              <Truck size={14} />
+              <Truck size={13} />
               <span className="hidden sm:inline">Proveedores</span>
             </button>
             <button
               onClick={hacerCorte}
               disabled={haciendoCorte || !cajaAbierta}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
             >
-              <Wallet size={14} />
-              {haciendoCorte ? 'Generando...' : 'Hacer corte'}
+              <Wallet size={13} />
+              {haciendoCorte ? 'Generando...' : 'Corte'}
             </button>
           </div>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-0.5">
-          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-20">
-            <p className="text-[10px] text-gray-500 uppercase font-medium">Apertura</p>
-            <p className="text-sm font-semibold text-gray-800">${Number(cajaAbierta?.monto_apertura ?? 0).toFixed(2)}</p>
+        {/* Fila 2: estadísticas con scroll */}
+        <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
+            <p className="text-[10px] text-gray-500 uppercase font-medium leading-none">Apertura</p>
+            <p className="text-xs font-semibold text-gray-800 leading-tight">${Number(cajaAbierta?.monto_apertura ?? 0).toFixed(2)}</p>
           </div>
-          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-17.5">
-            <p className="text-[10px] text-gray-500 uppercase font-medium">Ventas</p>
-            <p className="text-sm font-semibold text-gray-800">{summary.ventasHoy}</p>
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
+            <p className="text-[10px] text-gray-500 uppercase font-medium leading-none">Ventas</p>
+            <p className="text-xs font-semibold text-gray-800 leading-tight">{summary.ventasHoy}</p>
           </div>
-          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-22.5">
-            <p className="text-[10px] text-gray-500 uppercase font-medium">Monto día</p>
-            <p className="text-sm font-semibold text-emerald-700">${summary.montoHoy.toFixed(2)}</p>
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
+            <p className="text-[10px] text-gray-500 uppercase font-medium leading-none">Monto día</p>
+            <p className="text-xs font-semibold text-emerald-700 leading-tight">${summary.montoHoy.toFixed(2)}</p>
           </div>
-          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-22.5">
-            <p className="text-[10px] text-gray-500 uppercase font-medium">Total global</p>
-            <p className="text-sm font-semibold text-blue-700">${summary.montoTotalDia.toFixed(2)}</p>
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
+            <p className="text-[10px] text-gray-500 uppercase font-medium leading-none">Total global</p>
+            <p className="text-xs font-semibold text-blue-700 leading-tight">${summary.montoTotalDia.toFixed(2)}</p>
           </div>
           {cajaAbierta && (
-            <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-22.5">
-              <p className="text-[10px] text-gray-500 uppercase font-medium">Pagos prov.</p>
-              <p className="text-sm font-semibold text-rose-600">${totalPagosProv.toFixed(2)}</p>
+            <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
+              <p className="text-[10px] text-gray-500 uppercase font-medium leading-none">Pagos prov.</p>
+              <p className="text-xs font-semibold text-rose-600 leading-tight">${totalPagosProv.toFixed(2)}</p>
             </div>
           )}
-          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 min-w-20">
-            <p className="text-[10px] text-gray-500 uppercase font-medium">Unidades</p>
-            <p className="text-sm font-semibold text-indigo-700">
+          <div className="shrink-0 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1">
+            <p className="text-[10px] text-gray-500 uppercase font-medium leading-none">Unidades</p>
+            <p className="text-xs font-semibold text-indigo-700 leading-tight">
               {summary.unidadesVendidasHoy.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
             </p>
           </div>
         </div>
 
         {!isOnline && (
-          <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs">
-            <WifiOff size={13} className="text-amber-600 shrink-0" />
+          <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1 text-xs">
+            <WifiOff size={12} className="text-amber-600 shrink-0" />
             <span className="text-amber-800 font-medium">Sin conexión</span>
             <span className="text-amber-700 hidden sm:inline">— ventas guardadas localmente.</span>
           </div>
         )}
         {isOnline && pendingCount > 0 && (
-          <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 text-xs">
+          <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1 text-xs">
             <span className="text-blue-800">{pendingCount} venta{pendingCount > 1 ? 's' : ''} pendiente{pendingCount > 1 ? 's' : ''}</span>
             <button
               onClick={() => void syncPendingVentas()}
@@ -699,12 +701,12 @@ export default function PosPage() {
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
 
         {/* Panel productos */}
-        <section className="flex-3 min-h-0 flex flex-col overflow-hidden border-b lg:border-b-0 lg:border-r border-gray-200 bg-white">
+        <section className="flex-1 min-h-0 flex flex-col overflow-hidden border-b lg:border-b-0 lg:border-r border-gray-200 bg-white">
 
           {/* Búsqueda + adicional */}
-          <div className="shrink-0 p-3 border-b border-gray-100 space-y-2">
+          <div className="shrink-0 px-3 py-2 border-b border-gray-100 space-y-1.5">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={13} />
               <input
                 ref={searchInputRef}
                 value={search}
@@ -716,13 +718,11 @@ export default function PosPage() {
                   }
                 }}
                 placeholder="Nombre, SKU o código de barras"
-                className="w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full rounded-lg border border-gray-200 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
-            <div className="flex gap-2">
-              <div className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 bg-gray-50 flex items-center truncate">
-                Adicional
-              </div>
+            <div className="flex gap-1.5">
+              <span className="shrink-0 self-center text-[10px] text-gray-400 font-medium uppercase tracking-wide">+Extra</span>
               <input
                 value={productoRapidoPrecio}
                 onChange={(event) => {
@@ -746,16 +746,16 @@ export default function PosPage() {
                 type="number"
                 min="0"
                 step="0.01"
-                className="w-24 shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="Precio"
+                className="flex-1 min-w-0 rounded-lg border border-gray-200 px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Precio adicional"
               />
               <button
                 type="button"
                 onClick={addQuickItemToCart}
-                className="shrink-0 inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+                className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
               >
-                <Plus size={14} />
-                <span className="hidden sm:inline">Agregar</span>
+                <Plus size={13} />
+                Agregar
               </button>
             </div>
           </div>
@@ -814,12 +814,12 @@ export default function PosPage() {
         </section>
 
         {/* Panel carrito */}
-        <section className="flex-2 min-h-0 flex flex-col overflow-hidden lg:w-72 xl:w-80 lg:flex-none bg-white">
-          <div className="shrink-0 px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-            <ReceiptText size={16} className="text-indigo-600" />
-            <h2 className="text-sm font-semibold text-gray-800">Venta actual</h2>
+        <section className="flex-2 min-h-0 flex flex-col overflow-hidden lg:w-96 xl:w-104 lg:flex-none bg-white">
+          <div className="shrink-0 px-4 py-2.5 border-b border-indigo-100 bg-indigo-50 flex items-center gap-2">
+            <ReceiptText size={15} className="text-indigo-600 shrink-0" />
+            <h2 className="text-sm font-bold text-indigo-800 tracking-wide">Venta actual</h2>
             {carrito.length > 0 && (
-              <span className="ml-auto text-xs bg-indigo-100 text-indigo-700 font-semibold px-2 py-0.5 rounded-full">
+              <span className="ml-auto text-xs bg-indigo-600 text-white font-bold px-2 py-0.5 rounded-full">
                 {carrito.length}
               </span>
             )}
