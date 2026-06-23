@@ -1,8 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useState } from 'react'
 import { Truck, Plus, Pencil, UserCheck, UserX, Search, X, AlertCircle, ChevronLeft, ChevronRight, CalendarDays, List } from 'lucide-react'
 import { toast } from 'react-toastify'
-import { supabase } from '../../lib/supabaseClient'
-import { getLocalISOString } from '../../lib/dateUtils'
+import { api } from '../../lib/apiClient'
 import type { Proveedor } from '../../types/database'
 import ProveedoresSemana from './ProveedoresSemana'
 
@@ -43,34 +42,22 @@ export default function ProveedoresPage() {
 
   const loadProveedores = useCallback(async () => {
     setLoading(true)
-    const from = (currentPage - 1) * pageSize
-    const to = from + pageSize - 1
-
-    let query = supabase
-      .from('proveedores')
-      .select('*', { count: 'exact' })
-
-    const term = deferredSearch.trim()
-    if (term) {
-      query = query.or(`nombre.ilike.%${term}%,telefono.ilike.%${term}%,email.ilike.%${term}%`)
-    }
-
-    const { data, error, count } = await query
-      .order('activo', { ascending: false })
-      .order('nombre', { ascending: true })
-      .range(from, to)
-
-    if (error) {
-      toast.error(`Error cargando proveedores: ${error.message}`)
+    try {
+      const params = new URLSearchParams({
+        page: String(currentPage),
+        pageSize: String(pageSize),
+        ...(deferredSearch.trim() ? { search: deferredSearch.trim() } : {}),
+      })
+      const { items, total } = await api.get<{ items: Proveedor[]; total: number }>(`/proveedores?${params}`)
+      setProveedores(items)
+      setTotalCount(total)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error cargando proveedores')
       setProveedores([])
       setTotalCount(0)
+    } finally {
       setLoading(false)
-      return
     }
-
-    setProveedores((data ?? []) as Proveedor[])
-    setTotalCount(count ?? 0)
-    setLoading(false)
   }, [currentPage, deferredSearch, pageSize])
 
   useEffect(() => {
@@ -140,67 +127,34 @@ export default function ProveedoresPage() {
       dias_visita: form.dias_visita,
     }
 
-    if (editing) {
-      const { error, count } = await supabase
-        .from('proveedores')
-        .update(payload, { count: 'exact' })
-        .eq('id', editing.id)
-
-      if (error) {
-        toast.error(error.message)
-        setSaving(false)
-        return
+    try {
+      if (editing) {
+        await api.put(`/proveedores/${editing.id}`, payload)
+        toast.success('Proveedor actualizado')
+      } else {
+        await api.post('/proveedores', { ...payload, activo: true })
+        toast.success('Proveedor creado')
       }
-
-      if (count === 0) {
-        toast.error('No se encontró el proveedor para actualizar')
-        setSaving(false)
-        return
-      }
-
-      toast.success('Proveedor actualizado')
-      setSaving(false)
       closeModal()
       await loadProveedores()
-      return
-    }
-
-    const { error } = await supabase.from('proveedores').insert([
-      {
-        ...payload,
-        activo: true,
-        creado_en: getLocalISOString(),
-      },
-    ])
-
-    if (error) {
-      toast.error(error.message)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al guardar proveedor')
+    } finally {
       setSaving(false)
-      return
     }
-
-    toast.success('Proveedor creado')
-    setSaving(false)
-    closeModal()
-    await loadProveedores()
   }
 
   const canSubmitProveedor = form.nombre.trim().length >= 2
 
   const toggleEstado = async (proveedor: Proveedor) => {
     const next = !proveedor.activo
-    const { error } = await supabase
-      .from('proveedores')
-      .update({ activo: next })
-      .eq('id', proveedor.id)
-
-    if (error) {
-      toast.error(error.message)
-      return
+    try {
+      await api.put(`/proveedores/${proveedor.id}`, { activo: next })
+      toast.success(next ? 'Proveedor activado' : 'Proveedor desactivado')
+      await loadProveedores()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al cambiar estado')
     }
-
-    toast.success(next ? 'Proveedor activado' : 'Proveedor desactivado')
-    await loadProveedores()
   }
 
   return (

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, X, DollarSign, ClipboardList, Plus, Pencil, Check } from 'lucide-react'
 import { toast } from 'react-toastify'
-import { supabase } from '../../lib/supabaseClient'
+import { api } from '../../lib/apiClient'
 import type { Proveedor, ProveedorPago, ProveedorPedido } from '../../types/database'
 
 const DIAS_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
@@ -84,19 +84,17 @@ export default function ProveedoresSemana({ proveedores }: Props) {
     const from = toDateStr(dates[0])
     const to   = toDateStr(dates[5])
     setLoading(true)
-
-    const [pagosRes, pedidosRes] = await Promise.all([
-      supabase.from('proveedor_pagos').select('*').gte('fecha', from).lte('fecha', to),
-      supabase.from('proveedor_pedidos').select('*').gte('fecha', from).lte('fecha', to),
-    ])
-
-    if (pagosRes.error)   toast.error('Error cargando pagos')
-    else setPagos((pagosRes.data ?? []) as ProveedorPago[])
-
-    if (pedidosRes.error) toast.error('Error cargando pedidos')
-    else setPedidos((pedidosRes.data ?? []) as ProveedorPedido[])
-
-    setLoading(false)
+    try {
+      const { pagos: pagosData, pedidos: pedidosData } = await api.get<{ pagos: ProveedorPago[]; pedidos: ProveedorPedido[] }>(
+        `/proveedores/semana?from=${from}&to=${to}`,
+      )
+      setPagos(pagosData)
+      setPedidos(pedidosData)
+    } catch {
+      toast.error('Error cargando datos de la semana')
+    } finally {
+      setLoading(false)
+    }
   }, [weekOffset])
 
   useEffect(() => { loadWeekData() }, [loadWeekData])
@@ -131,19 +129,19 @@ export default function ProveedoresSemana({ proveedores }: Props) {
 
     const existing = getPedidoParaDia(detail.proveedor.id, detail.fecha)
 
-    if (existing) {
-      const { error } = await supabase
-        .from('proveedor_pedidos')
-        .update({ pedido: pedidoText.trim() })
-        .eq('id', existing.id)
-      if (error) { toast.error(error.message); setSavingPedido(false); return }
-    } else {
-      const { error } = await supabase.from('proveedor_pedidos').insert([{
-        proveedor_id: detail.proveedor.id,
-        fecha: detail.fecha,
-        pedido: pedidoText.trim(),
-      }])
-      if (error) { toast.error(error.message); setSavingPedido(false); return }
+    try {
+      if (existing) {
+        await api.patch(`/proveedores/pedidos/${existing.id}`, { pedido: pedidoText.trim() })
+      } else {
+        await api.post(`/proveedores/${detail.proveedor.id}/pedidos`, {
+          fecha: detail.fecha,
+          pedido: pedidoText.trim(),
+        })
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al guardar pedido')
+      setSavingPedido(false)
+      return
     }
 
     toast.success('Pedido guardado')
@@ -159,14 +157,17 @@ export default function ProveedoresSemana({ proveedores }: Props) {
     if (isNaN(montoNum) || montoNum <= 0) { toast.error('Ingresa un monto válido'); return }
     setSavingPago(true)
 
-    const { error } = await supabase.from('proveedor_pagos').insert([{
-      proveedor_id: detail.proveedor.id,
-      fecha: detail.fecha,
-      monto: montoNum,
-      notas: notasInput.trim() || null,
-    }])
-
-    if (error) { toast.error(error.message); setSavingPago(false); return }
+    try {
+      await api.post(`/proveedores/${detail.proveedor.id}/pagos`, {
+        fecha: detail.fecha,
+        monto: montoNum,
+        notas: notasInput.trim() || null,
+      })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al registrar pago')
+      setSavingPago(false)
+      return
+    }
 
     toast.success('Pago registrado')
     setMontoInput('')

@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
-import { supabase } from '../../lib/supabaseClient'
+import { api } from '../../lib/apiClient'
 import { useCaja } from '../../hooks/useCaja'
 import { formatDateTime } from '../../lib/dateUtils'
 import type { Usuario } from '../../types/database'
@@ -59,17 +59,12 @@ export default function CajaPage() {
   })
 
   const loadUsuarios = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('usuarios')
-      .select('*')
-      .eq('estado', 'ACTIVO')
-      .order('nombre')
-
-    if (error) {
-      toast.error(error.message)
-      return
+    try {
+      const data = await api.get<Usuario[]>('/usuarios')
+      setUsuarios(data.filter((u) => u.estado === 'ACTIVO'))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al cargar usuarios')
     }
-    setUsuarios((data ?? []) as Usuario[])
   }, [])
 
   useEffect(() => {

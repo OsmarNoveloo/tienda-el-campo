@@ -22,10 +22,10 @@ import { z } from 'zod'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
-import { supabase } from '../../lib/supabaseClient'
-import { getLocalISOString, formatDateTime, formatDate } from '../../lib/dateUtils'
+import { api } from '../../lib/apiClient'
+import { formatDateTime, formatDate } from '../../lib/dateUtils'
 import { normalizeSearchText } from '../../lib/searchUtils'
-import type { AbonoCredito, CreditoVenta, EstadoCredito } from '../../types/database'
+import type { CreditoVenta, EstadoCredito } from '../../types/database'
 
 type CreditoEstadoNormalizado = EstadoCredito | 'PENDIENTE'
 
@@ -128,145 +128,15 @@ export default function CreditosPage() {
     setError(null)
 
     try {
-      const from = (currentPage - 1) * pageSize
-      const to = from + pageSize - 1
-      const term = normalizeSearchText(deferredSearchTerm)
-
-      let query = supabase
-        .from('creditos_ventas')
-        .select('id, venta_id, cliente_id, usuario_id, fecha_credito, fecha_vencimiento, total_credito, saldo_pendiente, estado, observaciones', { count: 'exact' })
-
-      if (filterEstado !== 'TODOS') {
-        if (filterEstado === 'PENDIENTE') {
-          query = query
-            .gt('saldo_pendiente', 0)
-            .or('estado.eq.PENDIENTE,estado.is.null')
-        } else {
-          query = query.eq('estado', filterEstado)
-        }
-      }
-
-      if (term) {
-        const [clientesMatch, ventasMatch, usuariosMatch] = await Promise.all([
-          supabase.from('clientes').select('id').ilike('nombre', `%${term}%`).limit(1000),
-          supabase.from('ventas').select('id').ilike('folio', `%${term}%`).limit(1000),
-          supabase.from('usuarios').select('id').ilike('nombre', `%${term}%`).limit(1000),
-        ])
-
-        if (clientesMatch.error) throw clientesMatch.error
-        if (ventasMatch.error) throw ventasMatch.error
-        if (usuariosMatch.error) throw usuariosMatch.error
-
-        const clienteIds = ((clientesMatch.data ?? []) as Array<{ id: number }>).map((row) => row.id)
-        const ventaIds = ((ventasMatch.data ?? []) as Array<{ id: number }>).map((row) => row.id)
-        const usuarioIds = ((usuariosMatch.data ?? []) as Array<{ id: number }>).map((row) => row.id)
-
-        const orParts: string[] = []
-        if (clienteIds.length) orParts.push(`cliente_id.in.(${clienteIds.join(',')})`)
-        if (ventaIds.length) orParts.push(`venta_id.in.(${ventaIds.join(',')})`)
-        if (usuarioIds.length) orParts.push(`usuario_id.in.(${usuarioIds.join(',')})`)
-
-        if (!orParts.length) {
-          setCreditos([])
-          setTotalCreditosCount(0)
-          setLastUpdatedAt(new Date())
-          setLoading(false)
-          return
-        }
-
-        query = query.or(orParts.join(','))
-      }
-
-      const { data: creditosData, error: creditosErr, count } = await query
-        .order('fecha_credito', { ascending: false })
-        .order('id', { ascending: false })
-        .range(from, to)
-
-      if (creditosErr) throw creditosErr
-
-      setTotalCreditosCount(count ?? 0)
-
-      const rows = creditosData ?? []
-      const clienteIds = [...new Set(rows.map((row: any) => row.cliente_id).filter(Boolean))] as number[]
-      const ventaIds = [...new Set(rows.map((row: any) => row.venta_id).filter(Boolean))] as number[]
-      const usuarioIds = [...new Set(rows.map((row: any) => row.usuario_id).filter(Boolean))] as number[]
-      const creditoIds = rows.map((row: any) => row.id).filter(Boolean) as number[]
-
-      const [clientesRes, ventasRes, usuariosRes, abonosRes] = await Promise.all([
-        clienteIds.length > 0
-          ? supabase.from('clientes').select('id, nombre, telefono').in('id', clienteIds)
-          : Promise.resolve({ data: [], error: null }),
-        ventaIds.length > 0
-          ? supabase.from('ventas').select('id, folio').in('id', ventaIds)
-          : Promise.resolve({ data: [], error: null }),
-        usuarioIds.length > 0
-          ? supabase.from('usuarios').select('id, nombre').in('id', usuarioIds)
-          : Promise.resolve({ data: [], error: null }),
-        creditoIds.length > 0
-          ? supabase
-              .from('abonos_credito')
-              .select('id, credito_id, usuario_id, monto, fecha_abono, metodo_pago_id, observacion')
-              .in('credito_id', creditoIds)
-              .order('fecha_abono', { ascending: false })
-          : Promise.resolve({ data: [], error: null }),
-      ])
-
-      if (clientesRes.error) throw clientesRes.error
-      if (ventasRes.error) throw ventasRes.error
-      if (usuariosRes.error) throw usuariosRes.error
-      if (abonosRes.error) throw abonosRes.error
-
-      const clienteMap = new Map((clientesRes.data ?? []).map((cliente: any) => [cliente.id, cliente]))
-      const ventaMap = new Map((ventasRes.data ?? []).map((venta: any) => [venta.id, venta.folio]))
-      const usuarioMap = new Map((usuariosRes.data ?? []).map((usuario: any) => [usuario.id, usuario.nombre]))
-
-      const abonosRaw = (abonosRes.data ?? []) as AbonoCredito[]
-      const abonoUsuarioIds = [...new Set(abonosRaw.map((abono) => abono.usuario_id).filter(Boolean))] as number[]
-      let abonoUsuarioMap = new Map<number, string>()
-
-      if (abonoUsuarioIds.length > 0) {
-        const { data: abonoUsuarios, error: abonoUsuariosErr } = await supabase
-          .from('usuarios')
-          .select('id, nombre')
-          .in('id', abonoUsuarioIds)
-
-        if (abonoUsuariosErr) throw abonoUsuariosErr
-
-        abonoUsuarioMap = new Map((abonoUsuarios ?? []).map((usuario: any) => [usuario.id, usuario.nombre]))
-      }
-
-      const abonosPorCredito = new Map<number, AbonoDetalle[]>()
-      for (const abono of abonosRaw) {
-        const abonoDetalle: AbonoDetalle = {
-          ...abono,
-          usuario_nombre: abonoUsuarioMap.get(abono.usuario_id) ?? 'Sin usuario',
-        }
-
-        const lista = abonosPorCredito.get(abono.credito_id) ?? []
-        lista.push(abonoDetalle)
-        abonosPorCredito.set(abono.credito_id, lista)
-      }
-
-      const mapped: CreditoRow[] = rows.map((row: any) => {
-        const abonos = abonosPorCredito.get(row.id) ?? []
-        const totalAbonado = abonos.reduce((acc, abono) => acc + Number(abono.monto), 0)
-        const saldoActual = Math.max(Number(row.saldo_pendiente ?? 0), 0)
-        const estado = (row.estado ?? (saldoActual <= 0 ? 'PAGADO' : abonos.length > 0 ? 'ABONANDO' : 'PENDIENTE')) as CreditoEstadoNormalizado
-
-        return {
-          ...row,
-          cliente_nombre: clienteMap.get(row.cliente_id)?.nombre ?? 'Sin cliente',
-          cliente_telefono: clienteMap.get(row.cliente_id)?.telefono ?? null,
-          venta_folio: ventaMap.get(row.venta_id) ?? 'N/A',
-          usuario_nombre: usuarioMap.get(row.usuario_id) ?? 'Sin usuario',
-          abonos,
-          total_abonado: totalAbonado,
-          saldo_actual: saldoActual,
-          estado_normalizado: estado,
-        }
+      const params = new URLSearchParams({
+        page: String(currentPage),
+        pageSize: String(pageSize),
+        ...(deferredSearchTerm.trim() ? { search: normalizeSearchText(deferredSearchTerm) } : {}),
+        ...(filterEstado !== 'TODOS' ? { estado: filterEstado } : {}),
       })
-
-      setCreditos(mapped)
+      const { items, total } = await api.get<{ items: CreditoRow[]; total: number }>(`/creditos?${params}`)
+      setCreditos(items)
+      setTotalCreditosCount(total)
       setLastUpdatedAt(new Date())
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Error cargando créditos'
@@ -280,50 +150,8 @@ export default function CreditosPage() {
   const loadClientesDeuda = useCallback(async () => {
     setLoadingClientesDeuda(true)
     try {
-      const { data: creditsData, error: creditsErr } = await supabase
-        .from('creditos_ventas')
-        .select('cliente_id, saldo_pendiente')
-        .not('estado', 'in', '("PAGADO","CANCELADO")')
-        .gt('saldo_pendiente', 0)
-
-      if (creditsErr) throw creditsErr
-
-      const byCliente = new Map<number, { total: number; count: number }>()
-      for (const row of (creditsData ?? []) as any[]) {
-        const prev = byCliente.get(row.cliente_id) ?? { total: 0, count: 0 }
-        byCliente.set(row.cliente_id, { total: prev.total + Number(row.saldo_pendiente), count: prev.count + 1 })
-      }
-
-      if (byCliente.size === 0) {
-        setClientesDeuda([])
-        return
-      }
-
-      const clienteIds = [...byCliente.keys()]
-      const { data: clientesData, error: clientesErr } = await supabase
-        .from('clientes')
-        .select('id, nombre, telefono')
-        .in('id', clienteIds)
-
-      if (clientesErr) throw clientesErr
-
-      const clienteMap = new Map((clientesData ?? []).map((c: any) => [c.id, c]))
-
-      const result: ClienteDeudaRow[] = clienteIds
-        .map((id) => {
-          const agg = byCliente.get(id)!
-          const cliente = clienteMap.get(id)
-          return {
-            cliente_id: id,
-            cliente_nombre: cliente?.nombre ?? 'Sin nombre',
-            cliente_telefono: cliente?.telefono ?? null,
-            total_deuda: agg.total,
-            creditos_activos: agg.count,
-          }
-        })
-        .sort((a, b) => b.total_deuda - a.total_deuda)
-
-      setClientesDeuda(result)
+      const data = await api.get<ClienteDeudaRow[]>('/creditos/deuda-clientes')
+      setClientesDeuda(data)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Error cargando deudas por cliente')
     } finally {
@@ -407,128 +235,53 @@ export default function CreditosPage() {
       return
     }
 
-    // Modo cliente: distribuir pago entre todos los créditos del cliente
     if (isClienteMode && selectedClienteDeuda) {
       const saldoTotal = selectedClienteDeuda.total_deuda
       const montoFinal = actionMode === 'liquidar' ? saldoTotal : Number(values.monto)
 
-      if (montoFinal <= 0) {
-        toast.error('El monto debe ser mayor a 0')
-        return
-      }
-      if (montoFinal > saldoTotal + 0.001) {
-        toast.error('El abono no puede superar la deuda total del cliente')
-        return
-      }
+      if (montoFinal <= 0) { toast.error('El monto debe ser mayor a 0'); return }
+      if (montoFinal > saldoTotal + 0.001) { toast.error('El abono no puede superar la deuda total del cliente'); return }
 
-      const { data: creditsData, error: fetchErr } = await supabase
-        .from('creditos_ventas')
-        .select('id, saldo_pendiente')
-        .eq('cliente_id', selectedClienteDeuda.cliente_id)
-        .not('estado', 'in', '("PAGADO","CANCELADO")')
-        .gt('saldo_pendiente', 0)
-        .order('fecha_credito', { ascending: true })
-
-      if (fetchErr) { toast.error(fetchErr.message); return }
-
-      let remaining = montoFinal
-      const abonosToInsert: any[] = []
-      const creditosToUpdate: { id: number; saldo: number; estado: string }[] = []
-
-      for (const credit of (creditsData ?? []) as any[]) {
-        if (remaining <= 0.001) break
-        const saldo = Number(credit.saldo_pendiente)
-        const abonoMonto = Number(Math.min(remaining, saldo).toFixed(2))
-        const nuevoSaldo = Number(Math.max(saldo - abonoMonto, 0).toFixed(2))
-
-        abonosToInsert.push({
-          credito_id: credit.id,
-          usuario_id: user.id,
-          monto: abonoMonto,
-          fecha_abono: getLocalISOString(),
-          metodo_pago_id: null,
+      try {
+        await api.post('/creditos/pagar-cliente', {
+          cliente_id: selectedClienteDeuda.cliente_id,
+          monto: Number(montoFinal.toFixed(2)),
           observacion: values.observacion?.trim() || null,
+          usuario_id: user.id,
         })
-        creditosToUpdate.push({ id: credit.id, saldo: nuevoSaldo, estado: nuevoSaldo <= 0 ? 'PAGADO' : 'ABONANDO' })
-        remaining -= abonoMonto
+        toast.success(
+          actionMode === 'liquidar'
+            ? `Deuda de ${selectedClienteDeuda.cliente_nombre} liquidada`
+            : `Abono registrado para ${selectedClienteDeuda.cliente_nombre}`,
+        )
+        closeModal()
+        await Promise.all([loadClientesDeuda(), loadCreditos()])
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Error al registrar pago')
       }
-
-      const { error: abonoErr } = await supabase.from('abonos_credito').insert(abonosToInsert)
-      if (abonoErr) { toast.error(abonoErr.message); return }
-
-      for (const upd of creditosToUpdate) {
-        const { error: updErr } = await supabase
-          .from('creditos_ventas')
-          .update({ saldo_pendiente: upd.saldo, estado: upd.estado })
-          .eq('id', upd.id)
-        if (updErr) toast.warning(`Error actualizando crédito ${upd.id}: ${updErr.message}`)
-      }
-
-      toast.success(
-        actionMode === 'liquidar'
-          ? `Deuda de ${selectedClienteDeuda.cliente_nombre} liquidada`
-          : `Abono distribuido en ${abonosToInsert.length} crédito${abonosToInsert.length !== 1 ? 's' : ''}`,
-      )
-      closeModal()
-      await Promise.all([loadClientesDeuda(), loadCreditos()])
       return
     }
 
-    // Modo crédito individual
-    if (!selectedCredito) {
-      toast.error('Selecciona un crédito')
-      return
-    }
+    if (!selectedCredito) { toast.error('Selecciona un crédito'); return }
 
-    const monto = Number(values.monto)
     const saldoDisponible = Number(selectedCredito.saldo_actual)
-    const montoFinal = actionMode === 'liquidar' ? saldoDisponible : monto
+    const montoFinal = actionMode === 'liquidar' ? saldoDisponible : Number(values.monto)
 
-    if (montoFinal <= 0) {
-      toast.error('El monto debe ser mayor a 0')
-      return
-    }
+    if (montoFinal <= 0) { toast.error('El monto debe ser mayor a 0'); return }
+    if (montoFinal > saldoDisponible) { toast.error('El abono no puede ser mayor al saldo pendiente'); return }
 
-    if (montoFinal > saldoDisponible) {
-      toast.error('El abono no puede ser mayor al saldo pendiente')
-      return
-    }
-
-    const nuevoSaldo = Math.max(saldoDisponible - montoFinal, 0)
-    const nuevoEstado: CreditoEstadoNormalizado = nuevoSaldo <= 0 ? 'PAGADO' : 'ABONANDO'
-
-    const { error: abonoErr } = await supabase.from('abonos_credito').insert([
-      {
-        credito_id: selectedCredito.id,
-        usuario_id: user.id,
+    try {
+      await api.post(`/creditos/${selectedCredito.id}/abonos`, {
         monto: Number(montoFinal.toFixed(2)),
-        fecha_abono: getLocalISOString(),
-        metodo_pago_id: null,
         observacion: values.observacion?.trim() || null,
-      },
-    ])
-
-    if (abonoErr) {
-      toast.error(abonoErr.message)
-      return
-    }
-
-    const { error: creditoErr } = await supabase
-      .from('creditos_ventas')
-      .update({
-        saldo_pendiente: Number(nuevoSaldo.toFixed(2)),
-        estado: nuevoEstado,
+        usuario_id: user.id,
       })
-      .eq('id', selectedCredito.id)
-
-    if (creditoErr) {
-      toast.error(`Abono registrado, pero no se pudo actualizar el crédito: ${creditoErr.message}`)
-      return
+      toast.success(montoFinal >= saldoDisponible ? 'Crédito liquidado' : 'Abono registrado')
+      closeModal()
+      await loadCreditos()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al registrar abono')
     }
-
-    toast.success(nuevoEstado === 'PAGADO' ? 'Crédito liquidado' : 'Abono registrado')
-    closeModal()
-    await loadCreditos()
   }
 
   const toggleExpand = (creditoId: number) => {

@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
-import { supabase } from '../../lib/supabaseClient'
+import { api } from '../../lib/apiClient'
 import { getLocalISOString } from '../../lib/dateUtils'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { normalizeSearchText } from '../../lib/searchUtils'
@@ -35,6 +35,12 @@ type ClienteCreditoOption = {
   saldo_deuda: number
 }
 
+type CajaActual = {
+  id: number
+  monto_apertura: number
+  fecha_apertura: string
+}
+
 const initialSummary: DailySummary = {
   ventasHoy: 0,
   montoHoy: 0,
@@ -42,10 +48,8 @@ const initialSummary: DailySummary = {
   unidadesVendidasHoy: 0,
 }
 
-const PRODUCTOS_FETCH_CHUNK = 1000
 const PRODUCTOS_PAGE_SIZE = 20
-const SALE_TIMEOUT_MS = 4000 // si Supabase no responde en 4s, encolar offline
-
+const SALE_TIMEOUT_MS = 4000
 
 function generateFolio() {
   const now = new Date()
@@ -88,7 +92,7 @@ export default function PosPage() {
   const [clientes, setClientes] = useState<ClienteCreditoOption[]>([])
   const [tipoCobro, setTipoCobro] = useState<'CONTADO' | 'CREDITO'>('CONTADO')
   const [clienteCreditoId, setClienteCreditoId] = useState<number | ''>('')
-  const [cajaAbierta, setCajaAbierta] = useState<{ id: number; monto_apertura: number; fecha_apertura: string } | null>(null)
+  const [cajaAbierta, setCajaAbierta] = useState<CajaActual | null>(null)
   const [cajaLoading, setCajaLoading] = useState(true)
   const cajaRequestInFlight = useRef(false)
   const searchTypingMeta = useRef({
@@ -115,7 +119,6 @@ export default function PosPage() {
   const deferredSearch = useDeferredValue(search)
   const [productoPage, setProductoPage] = useState(1)
 
-  // Pre-normalizar una sola vez cuando cambia la lista de productos
   const productosNorm = useMemo(
     () => productos.map((p) => ({
       p,
@@ -134,7 +137,6 @@ export default function PosPage() {
       .map(({ p }) => p)
   }, [productos, productosNorm, deferredSearch])
 
-  // Resetear a página 1 cuando cambia el filtro
   useEffect(() => { setProductoPage(1) }, [deferredSearch])
 
   const productosTotalPages = useMemo(
@@ -150,17 +152,11 @@ export default function PosPage() {
   const tryAddByBarcode = (rawCode: string) => {
     const code = rawCode.trim()
     if (!code) return false
-
     const producto = productos.find((p) => (p.codigo_barras ?? '').trim() === code)
     if (!producto) return false
-
     addToCart(producto)
     setSearch('')
-    searchTypingMeta.current = {
-      lastTs: 0,
-      isRapidSequence: true,
-      prevValue: '',
-    }
+    searchTypingMeta.current = { lastTs: 0, isRapidSequence: true, prevValue: '' }
     return true
   }
 
@@ -176,7 +172,6 @@ export default function PosPage() {
       return
     }
 
-    // If many characters arrive at once (paste/scanner burst), treat it as direct input.
     if (jump > 1 && growing) {
       searchTypingMeta.current = { lastTs: now, isRapidSequence: true, prevValue: value }
       if (!tryAddByBarcode(value)) setSearch(value)
@@ -195,15 +190,12 @@ export default function PosPage() {
 
     searchTypingMeta.current = { lastTs: now, isRapidSequence: isRapid, prevValue: value }
 
-    if (isRapid && value.length >= 6 && tryAddByBarcode(value)) {
-      return
-    }
+    if (isRapid && value.length >= 6 && tryAddByBarcode(value)) return
 
     setSearch(value)
   }
 
   const loadProductos = useCallback(async () => {
-    // Mostrar cache al instante para no bloquear la UI en conexiones lentas
     const cached = await getProductosFromCache()
     if (cached.length > 0) {
       setProductos(cached)
@@ -218,123 +210,47 @@ export default function PosPage() {
     }
 
     setRefreshingProductos(true)
-    const allProductos: Producto[] = []
-    let from = 0
-
-    while (true) {
-      const to = from + PRODUCTOS_FETCH_CHUNK - 1
-      const { data, error } = await supabase
-        .from('productos')
-        .select('*')
-        .eq('activo', true)
-        .order('nombre')
-        .range(from, to)
-
-      if (error) {
-        if (cached.length === 0) toast.error(error.message)
-        break
+    try {
+      const data = await api.get<Producto[]>('/productos?activo=true')
+      if (data.length > 0) {
+        setProductos(data)
+        void saveProductosToCache(data)
       }
-
-      const rows = (data ?? []) as Producto[]
-      allProductos.push(...rows)
-
-      if (rows.length < PRODUCTOS_FETCH_CHUNK) break
-      from += PRODUCTOS_FETCH_CHUNK
+    } catch (err) {
+      if (cached.length === 0) toast.error('No se pudieron cargar los productos')
+    } finally {
+      setLoading(false)
+      setRefreshingProductos(false)
     }
-
-    if (allProductos.length > 0) {
-      setProductos(allProductos)
-      void saveProductosToCache(allProductos)
-    }
-    setLoading(false)
-    setRefreshingProductos(false)
   }, [])
 
   const loadClientes = useCallback(async () => {
-    // Mostrar cache al instante
     const cached = await getClientesFromCache()
     if (cached.length > 0) setClientes(cached)
 
     if (!navigator.onLine) return
 
-    const { data, error } = await supabase
-      .from('clientes')
-      .select('id,nombre,activo')
-      .eq('activo', true)
-      .order('nombre')
-
-    if (error) {
-      if (cached.length === 0) toast.error(`No se pudo obtener clientes: ${error.message}`)
-      return
+    try {
+      const data = await api.get<ClienteCreditoOption[]>('/clientes/pos')
+      setClientes(data)
+      void saveClientesToCache(data)
+    } catch {
+      if (cached.length === 0) toast.error('No se pudieron cargar los clientes')
     }
-
-    const clienteIds = (data ?? []).map((c: any) => c.id as number)
-    let saldoMap = new Map<number, number>()
-
-    if (clienteIds.length > 0) {
-      const { data: saldosData } = await supabase
-        .from('creditos_ventas')
-        .select('cliente_id, saldo_pendiente')
-        .in('cliente_id', clienteIds)
-        .not('estado', 'in', '("PAGADO","CANCELADO")')
-        .gt('saldo_pendiente', 0)
-
-      for (const row of (saldosData ?? []) as any[]) {
-        saldoMap.set(row.cliente_id, (saldoMap.get(row.cliente_id) ?? 0) + Number(row.saldo_pendiente))
-      }
-    }
-
-    const mapped = (data ?? []).map((row: any) => ({
-      id: row.id,
-      nombre: row.nombre,
-      saldo_deuda: saldoMap.get(row.id) ?? 0,
-    })) as ClienteCreditoOption[]
-
-    setClientes(mapped)
-    void saveClientesToCache(mapped)
   }, [])
 
   const loadSummary = useCallback(async () => {
     if (!cajaAbierta) {
-      setSummary(prev => ({ ...prev, ventasHoy: 0, montoHoy: 0, montoTotalDia: 0, unidadesVendidasHoy: 0 }))
+      setSummary(initialSummary)
       return
     }
 
-    const { data: ventasData, error: ventasError } = await supabase
-      .from('ventas')
-      .select('id, total, estado')
-      .eq('caja_sesion_id', cajaAbierta.id)
-
-    if (ventasError) {
-      toast.error(`Error cargando ventas: ${ventasError.message}`)
-      return
+    try {
+      const data = await api.get<DailySummary>(`/caja/${cajaAbierta.id}/resumen`)
+      setSummary(data)
+    } catch {
+      // mantiene el resumen anterior si falla
     }
-
-    const ventas = ventasData ?? []
-    const ventasPagadas = ventas.filter((v: any) => v.estado === 'PAGADA')
-    const ventasHoy = ventasPagadas.length
-    const montoHoy = ventasPagadas.reduce((acc: number, v: any) => acc + Number(v.total), 0)
-    const montoTotalDia = ventas.reduce((acc: number, v: any) => acc + Number(v.total), 0)
-    const ventaIds = ventasPagadas.map((v: any) => v.id)
-
-    if (ventaIds.length === 0) {
-      setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy: 0 })
-      return
-    }
-
-    const { data: detalleData, error: detalleError } = await supabase
-      .from('venta_detalle')
-      .select('cantidad')
-      .in('venta_id', ventaIds)
-
-    if (detalleError) {
-      toast.error(`Error cargando detalle: ${detalleError.message}`)
-      setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy: 0 })
-      return
-    }
-
-    const unidadesVendidasHoy = (detalleData ?? []).reduce((acc: number, row: any) => acc + Number(row.cantidad), 0)
-    setSummary({ ventasHoy, montoHoy, montoTotalDia, unidadesVendidasHoy })
   }, [cajaAbierta])
 
   const { isOnline, pendingCount, isSyncing, syncPendingVentas, refreshPendingCount } = usePosOfflineSync(loadSummary)
@@ -352,68 +268,43 @@ export default function PosPage() {
       return
     }
 
-    const { data, error } = await supabase
-      .from('caja_sesiones')
-      .select('id,monto_apertura,fecha_apertura')
-      .eq('estado', 'ABIERTA')
-      .order('fecha_apertura', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (error) {
-      console.error('Error verificando caja:', error.message)
+    try {
+      const data = await api.get<CajaActual | null>('/caja/actual')
+      const next = data ? { id: data.id, monto_apertura: data.monto_apertura, fecha_apertura: data.fecha_apertura } : null
+      saveCajaToCache(next)
+      setCajaAbierta((prev) => {
+        if (!prev && !next) return prev
+        if (prev && next && prev.id === next.id && prev.monto_apertura === next.monto_apertura) return prev
+        return next
+      })
+    } catch {
       const cached = getCajaFromCache()
       if (cached) setCajaAbierta(cached)
+    } finally {
       if (showLoading) setCajaLoading(false)
       cajaRequestInFlight.current = false
-      return
     }
-
-    const next = data ? { id: data.id as number, monto_apertura: data.monto_apertura as number, fecha_apertura: data.fecha_apertura as string } : null
-    saveCajaToCache(next)
-    setCajaAbierta((prev) => {
-      if (!prev && !next) return prev
-      if (prev && next && prev.id === next.id && prev.monto_apertura === next.monto_apertura && prev.fecha_apertura === next.fecha_apertura) return prev
-      return next
-    })
-
-    if (showLoading) setCajaLoading(false)
-    cajaRequestInFlight.current = false
   }, [])
 
-  // Efecto separado para reaccionar a cambios de caja
   useEffect(() => {
     if (cajaAbierta === null && cajaLoading === false) {
       setCarrito([])
-      setSummary(prev => ({ ...prev, ventasHoy: 0, montoHoy: 0, unidadesVendidasHoy: 0 }))
+      setSummary(initialSummary)
     }
   }, [cajaAbierta, cajaLoading])
 
-  // Inicializar al montar el componente
   useEffect(() => {
     loadClientes()
     loadProductos()
     verificarCajaAbierta(true)
-    loadSummary()
-  }, []) // Dependencias vacías: solo se ejecuta al montar
+  }, [])
 
-  // Escuchar cambios de caja en tiempo real para evitar polling constante
+  // Polling de caja en lugar de real-time
   useEffect(() => {
-    const channel = supabase
-      .channel('pos-caja-sesiones')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'caja_sesiones' },
-        () => {
-          if (config.pauseRefreshOnHiddenTab && document.hidden) return
-          void verificarCajaAbierta(false)
-        },
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED' && (!config.pauseRefreshOnHiddenTab || !document.hidden)) {
-          void verificarCajaAbierta(false)
-        }
-      })
+    const interval = setInterval(() => {
+      if (config.pauseRefreshOnHiddenTab && document.hidden) return
+      void verificarCajaAbierta(false)
+    }, 15000)
 
     const handleVisibilityChange = () => {
       if (config.pauseRefreshOnHiddenTab && document.hidden) return
@@ -421,29 +312,24 @@ export default function PosPage() {
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
-
     return () => {
+      clearInterval(interval)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      void supabase.removeChannel(channel)
     }
   }, [config.pauseRefreshOnHiddenTab, verificarCajaAbierta])
 
   useEffect(() => {
     void loadSummary()
   }, [loadSummary])
-  
 
-  // Refrescar resumen periódicamente solo en pestaña visible
   useEffect(() => {
     const interval = setInterval(() => {
       if (config.pauseRefreshOnHiddenTab && document.hidden) return
       loadSummary()
     }, SUMMARY_POLL_MS)
-
     return () => clearInterval(interval)
   }, [SUMMARY_POLL_MS, config.pauseRefreshOnHiddenTab, loadSummary])
 
-  // Listener global de teclado — actualizado en cada render para tener closures frescos
   useEffect(() => {
     const handler = (e: KeyboardEvent) => globalKeyHandlerRef.current(e)
     document.addEventListener('keydown', handler)
@@ -455,19 +341,15 @@ export default function PosPage() {
       const existing = prev.find((item) => item.producto.id === producto.id)
       if (existing) {
         return prev.map((item) =>
-          item.producto.id === producto.id
-            ? { ...item, cantidad: item.cantidad + 1 }
-            : item,
+          item.producto.id === producto.id ? { ...item, cantidad: item.cantidad + 1 } : item,
         )
       }
-
       return [...prev, { producto, cantidad: 1 }]
     })
   }
 
   const addQuickItemToCart = () => {
     const precio = Number(productoRapidoPrecio)
-
     if (!Number.isFinite(precio) || precio <= 0) {
       toast.error('Ingresa un precio mayor a 0')
       return
@@ -491,10 +373,7 @@ export default function PosPage() {
       unidad_medida_id: null,
     }
 
-    setCarrito((prev) => [
-      ...prev,
-      { producto: quickProduct, cantidad: 1, isQuickItem: true, quickCode },
-    ])
+    setCarrito((prev) => [...prev, { producto: quickProduct, cantidad: 1, isQuickItem: true, quickCode }])
     setProductoRapidoPrecio('')
     toast.success('Adicional agregado al carrito')
   }
@@ -503,9 +382,7 @@ export default function PosPage() {
     setCarrito((prev) =>
       prev
         .map((item) =>
-          item.producto.id === productoId
-            ? { ...item, cantidad: Math.max(1, item.cantidad + delta) }
-            : item,
+          item.producto.id === productoId ? { ...item, cantidad: Math.max(1, item.cantidad + delta) } : item,
         )
         .filter((item) => item.cantidad > 0),
     )
@@ -521,7 +398,6 @@ export default function PosPage() {
     if (carrito.length === 0) { toast.info('Agrega productos al carrito.'); return }
     if (tipoCobro === 'CREDITO' && !clienteCreditoId) { toast.error('Selecciona un cliente para registrar deuda.'); return }
 
-    // Capturar todo antes de limpiar el carrito
     const folio = generateFolio()
     const total = Number(subtotal.toFixed(2))
     const capturedTotalItems = totalItems
@@ -585,7 +461,7 @@ export default function PosPage() {
       observaciones: `Crédito generado desde POS (${folio})`,
     } : null
 
-    // === OPTIMISTA: liberar UI inmediatamente ===
+    // Liberar UI inmediatamente
     setCarrito([])
     setTipoCobro('CONTADO')
     setClienteCreditoId('')
@@ -601,7 +477,6 @@ export default function PosPage() {
       { autoClose: 2000 },
     )
 
-    // === SEGUNDO PLANO: persistir sin bloquear la UI ===
     void (async () => {
       const encolarOffline = async () => {
         await queueVenta({ folio, ventaPayload, detallePayload, movimientosPayload, creditoPayload, createdAt: getLocalISOString() })
@@ -614,120 +489,52 @@ export default function PosPage() {
         return
       }
 
-      const abortCtrl = new AbortController()
-      const abortTimer = setTimeout(() => abortCtrl.abort(), SALE_TIMEOUT_MS)
+      const controller = new AbortController()
+      const abortTimer = setTimeout(() => controller.abort(), SALE_TIMEOUT_MS)
 
-      let ventaId: number
       try {
-        const { data: ventaRow, error: ventaError } = await supabase
-          .from('ventas')
-          .insert([ventaPayload])
-          .select('id')
-          .abortSignal(abortCtrl.signal)
-          .single()
-
+        await api.post('/ventas', {
+          ...ventaPayload,
+          detalle: detallePayload,
+          movimientos: movimientosPayload,
+          credito: creditoPayload,
+        })
         clearTimeout(abortTimer)
-
-        if (ventaError || !ventaRow) {
-          if (isNetworkError(ventaError)) {
-            await encolarOffline()
-          } else {
-            toast.error(ventaError?.message ?? 'No se pudo guardar la venta.')
-          }
-          return
+      } catch (err) {
+        clearTimeout(abortTimer)
+        if (isNetworkError(err)) {
+          await encolarOffline()
+        } else {
+          toast.error((err as Error).message ?? 'No se pudo guardar la venta.')
         }
-
-        ventaId = ventaRow.id as number
-      } catch {
-        clearTimeout(abortTimer)
-        await encolarOffline()
-        return
       }
-
-      // Insertar detalle, movimientos y crédito en paralelo
-      await Promise.all([
-        detallePayload.length > 0
-          ? supabase.from('venta_detalle')
-              .insert(detallePayload.map((d) => ({ ...d, venta_id: ventaId })))
-              .then(({ error }) => { if (error) console.error('Detalle venta:', error.message) })
-          : Promise.resolve(),
-        movimientosPayload.length > 0
-          ? supabase.from('inventario_movimientos')
-              .insert(movimientosPayload.map((m) => ({ ...m, referencia_id: ventaId })))
-              .then(({ error }) => { if (error) console.warn('Movimiento inventario:', error.message) })
-          : Promise.resolve(),
-        creditoPayload
-          ? supabase.from('creditos_ventas')
-              .insert([{ ...creditoPayload, venta_id: ventaId }])
-              .then(({ error }) => { if (error) console.warn('Crédito venta:', error.message) })
-          : Promise.resolve(),
-      ])
     })()
   }
 
   const hacerCorte = async () => {
-    if (!user) {
-      toast.error('No hay sesión activa para hacer corte.')
-      return
-    }
-
-    if (!cajaAbierta) {
-      toast.error('No hay caja abierta para hacer corte.')
-      return
-    }
+    if (!user) { toast.error('No hay sesión activa para hacer corte.'); return }
+    if (!cajaAbierta) { toast.error('No hay caja abierta para hacer corte.'); return }
 
     setHaciendoCorte(true)
-    const efectivoEsperado = Number(cajaAbierta.monto_apertura) + Number(summary.montoHoy)
-
-    const { error: corteError } = await supabase.from('cortes_caja').insert([
-      {
-        caja_sesion_id: cajaAbierta.id,
-        usuario_id: user.id,
-        fecha_corte: getLocalISOString(),
-        total_ventas: Number(summary.montoHoy.toFixed(2)),
+    try {
+      await api.post(`/caja/cerrar/${cajaAbierta.id}`, {
+        empleado_cierre_id: user.id,
         total_efectivo: Number(summary.montoHoy.toFixed(2)),
         total_tarjeta: 0,
-        total_entradas: 0,
-        total_salidas: 0,
-        efectivo_esperado: Number(efectivoEsperado.toFixed(2)),
-        efectivo_contado: Number(efectivoEsperado.toFixed(2)),
-        diferencia: 0,
-        observacion: 'Corte generado desde POS',
-      },
-    ])
-
-    if (corteError) {
-      toast.error(corteError.message)
-      setHaciendoCorte(false)
-      return
-    }
-
-    const { error: cierreError } = await supabase
-      .from('caja_sesiones')
-      .update({
-        estado: 'CERRADA',
-        fecha_cierre: getLocalISOString(),
-        empleado_cierre_id: user.id,
+        observaciones: 'Corte generado desde POS',
       })
-      .eq('id', cajaAbierta.id)
-
-    if (cierreError) {
-      toast.warning(`Corte creado, pero no se cerro caja: ${cierreError.message}`)
+      toast.success('Corte de caja realizado.')
+      await verificarCajaAbierta(true)
+    } catch (err) {
+      toast.error((err as Error).message ?? 'Error al hacer corte')
+    } finally {
       setHaciendoCorte(false)
-      return
     }
-
-    toast.success('Corte de caja realizado.')
-    // Reiniciar todo después de cerrar
-    await verificarCajaAbierta(true)
-    setHaciendoCorte(false)
   }
 
-  // Actualizar ref en cada render para capturar closures actuales
   globalKeyHandlerRef.current = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement
 
-    // ESC: finalizar venta (excepto en selects donde cierra el dropdown)
     if (e.key === 'Escape') {
       if (target.tagName === 'SELECT') return
       e.preventDefault()
@@ -735,7 +542,6 @@ export default function PosPage() {
       return
     }
 
-    // Si ya hay un input de texto enfocado, no interceptar — el input maneja el tecleo
     const isTypingInput =
       (target.tagName === 'INPUT' &&
         !['button', 'submit', 'checkbox', 'radio'].includes((target as HTMLInputElement).type)) ||
@@ -743,7 +549,6 @@ export default function PosPage() {
 
     if (isTypingInput) return
 
-    // Acumular caracteres del lector de barras (llegan en ráfaga < 100 ms entre cada uno)
     if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
       const now = Date.now()
       const delta = barcodeLastKeyRef.current === 0 ? 0 : now - barcodeLastKeyRef.current
@@ -764,7 +569,6 @@ export default function PosPage() {
       return
     }
 
-    // Enter: intentar código inmediatamente (los lectores envían Enter al final)
     if (e.key === 'Enter') {
       if (barcodeTimerRef.current) {
         clearTimeout(barcodeTimerRef.current)
@@ -1006,17 +810,11 @@ export default function PosPage() {
 
                 <div className="flex items-center justify-between">
                   <div className="inline-flex items-center rounded-lg border border-gray-200">
-                    <button
-                      onClick={() => changeQty(item.producto.id, -1)}
-                      className="px-2 py-1 text-gray-600 hover:bg-gray-50"
-                    >
+                    <button onClick={() => changeQty(item.producto.id, -1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
                       <Minus size={14} />
                     </button>
                     <span className="px-3 text-sm">{item.cantidad}</span>
-                    <button
-                      onClick={() => changeQty(item.producto.id, 1)}
-                      className="px-2 py-1 text-gray-600 hover:bg-gray-50"
-                    >
+                    <button onClick={() => changeQty(item.producto.id, 1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
                       <Plus size={14} />
                     </button>
                   </div>
@@ -1086,7 +884,6 @@ export default function PosPage() {
           </div>
         </section>
       </div>
-
     </div>
   )
 }

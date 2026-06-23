@@ -5,14 +5,13 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
-import { supabase } from '../../lib/supabaseClient'
+import { api } from '../../lib/apiClient'
 import { useInventario } from '../../hooks/useInventario'
 import { formatDateTime } from '../../lib/dateUtils'
 import type { TipoMovimiento, Producto } from '../../types/database'
 import type { StockProducto } from '../../hooks/useInventario'
 
 const STOCK_PAGE_SIZE_OPTIONS = [20, 50, 100]
-const PRODUCTOS_FETCH_CHUNK = 1000
 
 const schema = z.object({
   producto_id: z.coerce.number().positive('Selecciona un producto'),
@@ -88,31 +87,12 @@ export default function InventarioPage() {
   }, [quickCantidadInput, quickTipo, reset])
 
   const loadProductos = useCallback(async () => {
-    const allProductos: Producto[] = []
-    let from = 0
-
-    while (true) {
-      const to = from + PRODUCTOS_FETCH_CHUNK - 1
-      const { data, error } = await supabase
-        .from('productos')
-        .select('*')
-        .eq('activo', true)
-        .order('nombre')
-        .range(from, to)
-
-      if (error) {
-        toast.error(error.message)
-        return
-      }
-
-      const rows = (data ?? []) as Producto[]
-      allProductos.push(...rows)
-
-      if (rows.length < PRODUCTOS_FETCH_CHUNK) break
-      from += PRODUCTOS_FETCH_CHUNK
+    try {
+      const data = await api.get<Producto[]>('/productos')
+      setProductos(data)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al cargar productos')
     }
-
-    setProductos(allProductos)
   }, [])
 
   const refreshStock = useCallback(async (showLoader = false) => {

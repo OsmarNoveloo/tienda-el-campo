@@ -10,21 +10,12 @@ import {
 
 async function syncOne(venta: PendingVenta): Promise<boolean> {
   try {
-    const ventaRow = await api.post<{ id: number }>('/ventas', {
+    await api.post('/ventas', {
       ...venta.ventaPayload,
       detalle: venta.detallePayload,
+      movimientos: venta.movimientosPayload,
+      credito: venta.creditoPayload,
     })
-
-    const ventaId = ventaRow.id
-
-    for (const mov of venta.movimientosPayload) {
-      await api.post('/inventario/movimientos', { ...mov, referencia_id: ventaId })
-    }
-
-    if (venta.creditoPayload) {
-      await api.post('/creditos', { ...venta.creditoPayload, venta_id: ventaId })
-    }
-
     await removePendingVenta(venta.localId!)
     return true
   } catch {

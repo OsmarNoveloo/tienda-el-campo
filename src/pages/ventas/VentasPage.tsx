@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { Receipt, Search, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, CalendarDays } from 'lucide-react'
 import { toast } from 'react-toastify'
-import { supabase } from '../../lib/supabaseClient'
+import { api } from '../../lib/apiClient'
 import { normalizeSearchText } from '../../lib/searchUtils'
 import { formatDateTime } from '../../lib/dateUtils'
 import type { EstadoVenta } from '../../types/database'
@@ -50,119 +50,47 @@ export default function VentasPage() {
     detalleCacheRef.current.clear()
     setExpandedId(null)
 
-    const from = (currentPage - 1) * pageSize
-    const to = from + pageSize - 1
-    const term = normalizeSearchText(deferredSearch)
-
-    let matchedUsuarioIds: number[] = []
-    if (term) {
-      const { data: usuariosMatch, error: usuariosError } = await supabase
-        .from('usuarios')
-        .select('id')
-        .ilike('nombre', `%${term}%`)
-        .limit(1000)
-
-      if (usuariosError) {
-        toast.error(`Error buscando usuarios: ${usuariosError.message}`)
-        setVentas([])
-        setTotalCount(0)
-        setLoading(false)
-        return
-      }
-
-      matchedUsuarioIds = ((usuariosMatch ?? []) as Array<{ id: number }>).map((row) => row.id)
-    }
-
-    let query = supabase
-      .from('ventas')
-      .select('id, folio, fecha_venta, total, estado, usuario_id, observacion', { count: 'exact' })
-      .order('fecha_venta', { ascending: false })
-      .order('id', { ascending: false })
-
-    if (fechaDesde) query = query.gte('fecha_venta', `${fechaDesde}T00:00:00`)
-    if (fechaHasta) query = query.lte('fecha_venta', `${fechaHasta}T23:59:59`)
-
-    if (term) {
-      if (matchedUsuarioIds.length > 0) {
-        query = query.or(`folio.ilike.%${term}%,usuario_id.in.(${matchedUsuarioIds.join(',')})`)
-      } else {
-        query = query.ilike('folio', `%${term}%`)
-      }
-    }
-
-    const { data, error, count } = await query.range(from, to)
-
-    if (error) {
-      toast.error(`Error cargando ventas: ${error.message}`)
+    try {
+      const params = new URLSearchParams({
+        page: String(currentPage),
+        pageSize: String(pageSize),
+        ...(deferredSearch.trim() ? { search: normalizeSearchText(deferredSearch) } : {}),
+        ...(fechaDesde ? { fechaDesde } : {}),
+        ...(fechaHasta ? { fechaHasta } : {}),
+      })
+      const { items, total } = await api.get<{ items: VentaRow[]; total: number }>(`/ventas?${params}`)
+      setVentas(items)
+      setTotalCount(total)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error cargando ventas')
+      setVentas([])
+      setTotalCount(0)
+    } finally {
       setLoading(false)
-      return
     }
-
-    setTotalCount(count ?? 0)
-
-    const usuarioIds = [...new Set((data ?? []).map((v: any) => v.usuario_id).filter(Boolean))] as number[]
-    let usuarioMap = new Map<number, string>()
-
-    if (usuarioIds.length > 0) {
-      const { data: usuariosData } = await supabase
-        .from('usuarios')
-        .select('id, nombre')
-        .in('id', usuarioIds)
-
-      usuarioMap = new Map((usuariosData ?? []).map((u: any) => [u.id, u.nombre]))
-    }
-
-    const mapped = (data ?? []).map((row: any) => ({
-      id: row.id,
-      folio: row.folio,
-      fecha_venta: row.fecha_venta,
-      total: Number(row.total),
-      estado: row.estado as EstadoVenta,
-      usuario_nombre: usuarioMap.get(row.usuario_id) ?? 'Sin usuario',
-      observacion: row.observacion ?? null,
-    }))
-
-    setVentas(mapped)
-    setLoading(false)
   }, [currentPage, deferredSearch, pageSize, fechaDesde, fechaHasta])
 
   const loadDetalle = async (ventaId: number) => {
     if (detalleCacheRef.current.has(ventaId)) return
     setLoadingDetalle(ventaId)
 
-    const { data: detalleData, error } = await supabase
-      .from('venta_detalle')
-      .select('cantidad, precio_unitario, subtotal, producto_id')
-      .eq('venta_id', ventaId)
-
-    if (error) {
-      toast.error(`Error cargando detalle: ${error.message}`)
+    try {
+      const venta = await api.get<{ detalle: Array<{ nombre: string; cantidad: number; precio_unitario: number; subtotal: number }> }>(
+        `/ventas/${ventaId}`,
+      )
+      const items: DetalleItem[] = venta.detalle.map((d) => ({
+        nombre: d.nombre,
+        cantidad: Number(d.cantidad),
+        precio_unitario: Number(d.precio_unitario),
+        subtotal: Number(d.subtotal),
+      }))
+      detalleCacheRef.current.set(ventaId, items)
+      setDetalleVersion((v) => v + 1)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error cargando detalle')
+    } finally {
       setLoadingDetalle(null)
-      return
     }
-
-    const productoIds = [...new Set((detalleData ?? []).map((d: any) => d.producto_id).filter(Boolean))]
-    let nombresMap = new Map<number, string>()
-
-    if (productoIds.length > 0) {
-      const { data: productosData } = await supabase
-        .from('productos')
-        .select('id, nombre')
-        .in('id', productoIds)
-
-      nombresMap = new Map((productosData ?? []).map((p: any) => [p.id, p.nombre]))
-    }
-
-    const items: DetalleItem[] = (detalleData ?? []).map((d: any) => ({
-      nombre: nombresMap.get(d.producto_id) ?? 'Producto eliminado',
-      cantidad: Number(d.cantidad),
-      precio_unitario: Number(d.precio_unitario),
-      subtotal: Number(d.subtotal),
-    }))
-
-    detalleCacheRef.current.set(ventaId, items)
-    setDetalleVersion((v) => v + 1)
-    setLoadingDetalle(null)
   }
 
   const toggleExpand = async (ventaId: number) => {
