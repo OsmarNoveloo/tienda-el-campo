@@ -25,6 +25,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
 
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem('tienda-auth-user')
+    window.location.href = '/login'
+    throw new Error('Sesión expirada')
+  }
+
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error((data as any).error ?? `Error ${res.status}`)

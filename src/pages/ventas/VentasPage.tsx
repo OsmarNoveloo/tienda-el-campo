@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { Receipt, Search, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, CalendarDays } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { api } from '../../lib/apiClient'
+import { useAuth } from '../../context/AuthContext'
 import { normalizeSearchText } from '../../lib/searchUtils'
 import { formatDateTime } from '../../lib/dateUtils'
 import type { EstadoVenta } from '../../types/database'
@@ -30,6 +31,7 @@ function todayStr() {
 }
 
 export default function VentasPage() {
+  const { user, isAdmin } = useAuth()
   const PAGE_SIZE_OPTIONS = [20, 50, 100]
   const [ventas, setVentas] = useState<VentaRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -57,6 +59,7 @@ export default function VentasPage() {
         ...(deferredSearch.trim() ? { search: normalizeSearchText(deferredSearch) } : {}),
         ...(fechaDesde ? { fechaDesde } : {}),
         ...(fechaHasta ? { fechaHasta } : {}),
+        ...(!isAdmin && user ? { usuario_id: String(user.id) } : {}),
       })
       const { items, total } = await api.get<{ items: VentaRow[]; total: number }>(`/ventas?${params}`)
       setVentas(items)
@@ -68,7 +71,7 @@ export default function VentasPage() {
     } finally {
       setLoading(false)
     }
-  }, [currentPage, deferredSearch, pageSize, fechaDesde, fechaHasta])
+  }, [currentPage, deferredSearch, pageSize, fechaDesde, fechaHasta, isAdmin, user])
 
   const loadDetalle = async (ventaId: number) => {
     if (detalleCacheRef.current.has(ventaId)) return
@@ -220,7 +223,7 @@ export default function VentasPage() {
                     <th className="w-8 px-3 py-3"></th>
                     <th className="text-left px-4 py-3 font-semibold">Folio</th>
                     <th className="text-left px-4 py-3 font-semibold">Fecha</th>
-                    <th className="text-left px-4 py-3 font-semibold">Usuario</th>
+                    {isAdmin && <th className="text-left px-4 py-3 font-semibold">Usuario</th>}
                     <th className="text-right px-4 py-3 font-semibold">Total</th>
                     <th className="text-center px-4 py-3 font-semibold">Estado</th>
                   </tr>
@@ -250,7 +253,7 @@ export default function VentasPage() {
                           </td>
                           <td className="px-4 py-3 font-medium text-gray-800">{venta.folio}</td>
                           <td className="px-4 py-3 text-gray-600">{formatDateTime(venta.fecha_venta)}</td>
-                          <td className="px-4 py-3 text-gray-600">{venta.usuario_nombre}</td>
+                          {isAdmin && <td className="px-4 py-3 text-gray-600">{venta.usuario_nombre}</td>}
                           <td className="px-4 py-3 text-right font-semibold text-gray-800">${Number(venta.total).toFixed(2)}</td>
                           <td className="px-4 py-3 text-center">
                             <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${venta.estado === 'PAGADA' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
@@ -261,7 +264,7 @@ export default function VentasPage() {
 
                         {isExpanded && (
                           <tr key={`${venta.id}-detalle`} className="bg-indigo-50/40">
-                            <td colSpan={6} className="px-6 pb-4 pt-1">
+                            <td colSpan={isAdmin ? 6 : 5} className="px-6 pb-4 pt-1">
                               {isLoadingThis || !detalle ? (
                                 <p className="text-xs text-gray-400 py-2">Cargando productos...</p>
                               ) : detalle.length === 0 ? (

@@ -249,12 +249,13 @@ export default function PosPage() {
     }
 
     try {
-      const data = await api.get<DailySummary>(`/caja/${cajaAbierta.id}/resumen`)
+      const params = user ? `?usuario_id=${user.id}` : ''
+      const data = await api.get<DailySummary>(`/caja/${cajaAbierta.id}/resumen${params}`)
       setSummary(data)
     } catch {
       // mantiene el resumen anterior si falla
     }
-  }, [cajaAbierta])
+  }, [cajaAbierta, user])
 
   const loadPagosProv = useCallback(async () => {
     try {
