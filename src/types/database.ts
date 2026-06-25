@@ -48,6 +48,7 @@ export interface Proveedor {
 export interface ProveedorPago {
   id: number
   proveedor_id: number
+  usuario_id?: number | null
   fecha: string
   monto: number
   notas?: string | null

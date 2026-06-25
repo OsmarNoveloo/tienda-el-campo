@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ClipboardList, DollarSign, Plus, Truck, X } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { api } from '../../lib/apiClient'
+import { useAuth } from '../../context/AuthContext'
 import type { Proveedor, ProveedorPago, ProveedorPedido } from '../../types/database'
 
 function toDateStr(d: Date): string {
@@ -32,6 +33,7 @@ interface Props {
 }
 
 export default function PosPagosProveedores({ onClose }: Props) {
+  const { user } = useAuth()
   const [proveedores, setProveedores] = useState<ProveedorRow[]>([])
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState<number | null>(null)
@@ -57,10 +59,11 @@ export default function PosPagosProveedores({ onClose }: Props) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
+      const usuarioParam = user ? `&usuario_id=${user.id}` : ''
       const [{ items }, { pagos, pedidos }] = await Promise.all([
         api.get<{ items: Proveedor[]; total: number }>('/proveedores?pageSize=200'),
         api.get<{ pagos: ProveedorPago[]; pedidos: ProveedorPedido[] }>(
-          `/proveedores/semana?from=${todayStr}&to=${todayStr}`,
+          `/proveedores/semana?from=${todayStr}&to=${todayStr}${usuarioParam}`,
         ),
       ])
 
