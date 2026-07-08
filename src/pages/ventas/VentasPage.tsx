@@ -38,6 +38,8 @@ export default function VentasPage() {
   const [search, setSearch] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
+  const [sumTotal, setSumTotal] = useState(0)
+  const [totalPagadas, setTotalPagadas] = useState(0)
   const [pageSize, setPageSize] = useState(20)
   const [fechaDesde, setFechaDesde] = useState(todayStr())
   const [fechaHasta, setFechaHasta] = useState(todayStr())
@@ -61,13 +63,22 @@ export default function VentasPage() {
         ...(fechaHasta ? { fechaHasta } : {}),
         ...(!isAdmin && user ? { usuario_id: String(user.id) } : {}),
       })
-      const { items, total } = await api.get<{ items: VentaRow[]; total: number }>(`/ventas?${params}`)
+      const { items, total, sumTotal, totalPagadas } = await api.get<{
+        items: VentaRow[]
+        total: number
+        sumTotal: number
+        totalPagadas: number
+      }>(`/ventas?${params}`)
       setVentas(items)
       setTotalCount(total)
+      setSumTotal(sumTotal)
+      setTotalPagadas(totalPagadas)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Error cargando ventas')
       setVentas([])
       setTotalCount(0)
+      setSumTotal(0)
+      setTotalPagadas(0)
     } finally {
       setLoading(false)
     }
@@ -123,16 +134,6 @@ export default function VentasPage() {
     return () => clearInterval(interval)
   }, [loadVentas])
 
-  const totalMonto = useMemo(
-    () => ventas.reduce((acc, v) => acc + Number(v.total), 0),
-    [ventas],
-  )
-
-  const totalPagadas = useMemo(
-    () => ventas.filter((v) => v.estado === 'PAGADA').length,
-    [ventas],
-  )
-
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -161,7 +162,7 @@ export default function VentasPage() {
         </div>
         <div className="bg-white rounded-xl border border-gray-100 p-4">
           <p className="text-xs text-gray-500">Monto total</p>
-          <p className="text-2xl font-bold text-indigo-700">${totalMonto.toFixed(2)}</p>
+          <p className="text-2xl font-bold text-indigo-700">${sumTotal.toFixed(2)}</p>
         </div>
       </div>
 
