@@ -126,14 +126,6 @@ export default function VentasPage() {
     if (currentPage > totalPages) setCurrentPage(totalPages)
   }, [currentPage, totalPages])
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (document.hidden) return
-      loadVentas()
-    }, 30000)
-    return () => clearInterval(interval)
-  }, [loadVentas])
-
   return (
     <div className="p-3 sm:p-4 md:p-6 space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

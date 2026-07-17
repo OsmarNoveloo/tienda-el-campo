@@ -108,7 +108,7 @@ export default function Sidebar({
 
       {/* Footer */}
       <div className={`${collapsed ? 'px-2' : 'px-5'} py-4 border-t border-gray-700 flex flex-col gap-2`}>
-        <p className="text-gray-500 text-xs text-center">v1.0.5</p>
+        <p className="text-gray-500 text-xs text-center">v1.0.15</p>
       </div>
     </aside>
   )

@@ -208,3 +208,13 @@ export interface AbonoCredito {
   metodo_pago_id?: number | null
   observacion?: string | null
 }
+
+export interface RegistroActividad {
+  id: number
+  usuario_id: number | null
+  usuario_nombre: string
+  accion: string
+  entidad: string
+  detalle: string | null
+  creado_en: string
+}
