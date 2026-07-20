@@ -1,6 +1,7 @@
 import { LayoutDashboard, ShoppingCart, CircleDollarSign, Package, Warehouse, Truck, Users, CreditCard, Banknote, Settings, Store, ShieldUser, NotebookPen, ChevronsLeft, Pin, PinOff } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import { useAccessControl, type AppSection } from '../../hooks/useAccessControl'
+import { version as appVersion } from '../../../package.json'
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'dashboard' as AppSection },
@@ -108,7 +109,7 @@ export default function Sidebar({
 
       {/* Footer */}
       <div className={`${collapsed ? 'px-2' : 'px-5'} py-4 border-t border-gray-700 flex flex-col gap-2`}>
-        <p className="text-gray-500 text-xs text-center">v1.0.15</p>
+        <p className="text-gray-500 text-xs text-center">v{appVersion}</p>
       </div>
     </aside>
   )

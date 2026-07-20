@@ -1,6 +1,8 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight, Truck } from 'lucide-react'
+import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight, Truck, PauseCircle } from 'lucide-react'
 import PosPagosProveedores from '../../components/pos/PosPagosProveedores'
+import PosVentasEnEspera from '../../components/pos/PosVentasEnEspera'
+import ConfirmDialog from '../../components/common/ConfirmDialog'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { api } from '../../lib/apiClient'
@@ -21,6 +23,14 @@ type CartItem = {
   cantidad: number
   isQuickItem?: boolean
   quickCode?: string
+}
+
+type HeldCart = {
+  id: string
+  carrito: CartItem[]
+  tipoCobro: 'CONTADO' | 'CREDITO'
+  clienteCreditoId: number | ''
+  creadoEn: string
 }
 
 type DailySummary = {
@@ -64,6 +74,10 @@ function generateFolio() {
   return `VTA-${YYYY}${MM}${DD}-${hh}${mm}${ss}`
 }
 
+function generateHeldId() {
+  return `hold-${Date.now()}-${Math.floor(Math.random() * 10000)}`
+}
+
 function generateBaseQuickCode() {
   const now = new Date()
   const pad = (value: number) => value.toString().padStart(2, '0')
@@ -84,6 +98,7 @@ export default function PosPage() {
 
   const [productos, setProductos] = useState<Producto[]>([])
   const [carrito, setCarrito] = useState<CartItem[]>([])
+  const [carritosEnEspera, setCarritosEnEspera] = useState<HeldCart[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [refreshingProductos, setRefreshingProductos] = useState(false)
@@ -96,6 +111,8 @@ export default function PosPage() {
   const [cajaAbierta, setCajaAbierta] = useState<CajaActual | null>(null)
   const [cajaLoading, setCajaLoading] = useState(true)
   const [pagosProvOpen, setPagosProvOpen] = useState(false)
+  const [ventasEnEsperaOpen, setVentasEnEsperaOpen] = useState(false)
+  const [confirmVaciarOpen, setConfirmVaciarOpen] = useState(false)
   const [totalPagosProv, setTotalPagosProv] = useState(0)
   const cajaRequestInFlight = useRef(false)
   const searchTypingMeta = useRef({
@@ -306,6 +323,7 @@ export default function PosPage() {
   useEffect(() => {
     if (cajaAbierta === null && cajaLoading === false) {
       setCarrito([])
+      setCarritosEnEspera([])
       setSummary(initialSummary)
     }
   }, [cajaAbierta, cajaLoading])
@@ -408,6 +426,59 @@ export default function PosPage() {
 
   const removeFromCart = (productoId: number) => {
     setCarrito((prev) => prev.filter((item) => item.producto.id !== productoId))
+  }
+
+  const ponerEnEspera = () => {
+    if (!carrito.length) return
+
+    setCarritosEnEspera((prev) => [
+      ...prev,
+      { id: generateHeldId(), carrito, tipoCobro, clienteCreditoId, creadoEn: getLocalISOString() },
+    ])
+    setCarrito([])
+    setTipoCobro('CONTADO')
+    setClienteCreditoId('')
+    toast.info('Venta en espera. Puedes iniciar otra venta.', { autoClose: 2000 })
+  }
+
+  const reanudarCarritoEnEspera = (id: string) => {
+    const target = carritosEnEspera.find((held) => held.id === id)
+    if (!target) return
+
+    const actualizados = carritosEnEspera.filter((held) => held.id !== id)
+    if (carrito.length > 0) {
+      actualizados.push({ id: generateHeldId(), carrito, tipoCobro, clienteCreditoId, creadoEn: getLocalISOString() })
+    }
+
+    setCarritosEnEspera(actualizados)
+    setCarrito(target.carrito)
+    setTipoCobro(target.tipoCobro)
+    setClienteCreditoId(target.clienteCreditoId)
+    setVentasEnEsperaOpen(false)
+  }
+
+  const descartarCarritoEnEspera = (id: string) => {
+    setCarritosEnEspera((prev) => prev.filter((held) => held.id !== id))
+  }
+
+  const handleEnEsperaClick = () => {
+    if (carrito.length > 0) {
+      ponerEnEspera()
+      return
+    }
+    if (carritosEnEspera.length > 0) {
+      setVentasEnEsperaOpen(true)
+      return
+    }
+    toast.info('No hay ventas en espera.')
+  }
+
+  const vaciarCarrito = () => {
+    setCarrito([])
+    setTipoCobro('CONTADO')
+    setClienteCreditoId('')
+    setConfirmVaciarOpen(false)
+    toast.info('Carrito vaciado.', { autoClose: 1500 })
   }
 
   const finalizarVenta = () => {
@@ -635,6 +706,19 @@ export default function PosPage() {
               <span className="hidden sm:inline">Proveedores</span>
             </button>
             <button
+              onClick={handleEnEsperaClick}
+              className="relative inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+              title={carrito.length > 0 ? 'Guardar esta venta y empezar otra' : 'Ver ventas en espera'}
+            >
+              <PauseCircle size={13} />
+              <span className="hidden sm:inline">En espera</span>
+              {carritosEnEspera.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 h-4 min-w-4 px-1 inline-flex items-center justify-center rounded-full bg-amber-600 text-white text-[10px] font-bold leading-none">
+                  {carritosEnEspera.length}
+                </span>
+              )}
+            </button>
+            <button
               onClick={hacerCorte}
               disabled={haciendoCorte || !cajaAbierta}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
@@ -821,9 +905,20 @@ export default function PosPage() {
             <ReceiptText size={15} className="text-indigo-600 shrink-0" />
             <h2 className="text-sm font-bold text-indigo-800 tracking-wide">Venta actual</h2>
             {carrito.length > 0 && (
-              <span className="ml-auto text-xs bg-indigo-600 text-white font-bold px-2 py-0.5 rounded-full">
-                {carrito.length}
-              </span>
+              <>
+                <span className="text-xs bg-indigo-600 text-white font-bold px-2 py-0.5 rounded-full">
+                  {carrito.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setConfirmVaciarOpen(true)}
+                  title="Vaciar carrito"
+                  className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                >
+                  <Trash2 size={13} />
+                  <span className="hidden sm:inline">Vaciar</span>
+                </button>
+              </>
             )}
           </div>
 
@@ -912,6 +1007,25 @@ export default function PosPage() {
 
       {pagosProvOpen && (
         <PosPagosProveedores onClose={() => { setPagosProvOpen(false); void loadPagosProv() }} />
+      )}
+
+      {ventasEnEsperaOpen && (
+        <PosVentasEnEspera
+          carritosEnEspera={carritosEnEspera}
+          onReanudar={reanudarCarritoEnEspera}
+          onDescartar={descartarCarritoEnEspera}
+          onClose={() => setVentasEnEsperaOpen(false)}
+        />
+      )}
+
+      {confirmVaciarOpen && (
+        <ConfirmDialog
+          title="¿Vaciar el carrito?"
+          description={`${totalItems} artículo${totalItems === 1 ? '' : 's'} · $${subtotal.toFixed(2)} — se perderán los productos de esta venta, esta acción no se puede deshacer.`}
+          confirmLabel="Sí, vaciar"
+          onConfirm={vaciarCarrito}
+          onCancel={() => setConfirmVaciarOpen(false)}
+        />
       )}
     </div>
   )
