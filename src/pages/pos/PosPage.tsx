@@ -114,6 +114,7 @@ export default function PosPage() {
   const [ventasEnEsperaOpen, setVentasEnEsperaOpen] = useState(false)
   const [confirmVaciarOpen, setConfirmVaciarOpen] = useState(false)
   const [totalPagosProv, setTotalPagosProv] = useState(0)
+  const [mobileView, setMobileView] = useState<'productos' | 'carrito'>('productos')
   const cajaRequestInFlight = useRef(false)
   const searchTypingMeta = useRef({
     lastTs: 0,
@@ -682,7 +683,7 @@ export default function PosPage() {
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0">
             <ShoppingCart className="text-indigo-600 shrink-0" size={14} />
-            <h1 className="text-[10px] font-semibold text-gray-400 shrink-0 uppercase tracking-wide">Punto de Venta</h1>
+            <h1 className="text-sm sm:text-base font-bold text-gray-700 shrink-0 uppercase tracking-wide">Punto de Venta</h1>
             {cajaLoading === false && (
               cajaAbierta ? (
                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 shrink-0">
@@ -783,11 +784,42 @@ export default function PosPage() {
         )}
       </div>
 
+      {/* ── Selector de vista (solo móvil/tablet) ── */}
+      <div className="lg:hidden shrink-0 grid grid-cols-2 gap-2 px-3 py-2 bg-white border-b border-gray-200">
+        <button
+          type="button"
+          onClick={() => setMobileView('productos')}
+          className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-semibold border transition-colors ${
+            mobileView === 'productos'
+              ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
+              : 'bg-white border-gray-200 text-gray-600'
+          }`}
+        >
+          <Search size={14} />
+          Productos
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileView('carrito')}
+          className={`relative flex items-center justify-between gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold border transition-colors ${
+            mobileView === 'carrito'
+              ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm'
+              : 'bg-white border-gray-200 text-gray-600'
+          }`}
+        >
+          <span className="flex items-center gap-1.5 min-w-0">
+            <ReceiptText size={14} className="shrink-0" />
+            <span className="truncate">Venta actual{carrito.length > 0 ? ` · ${totalItems}` : ''}</span>
+          </span>
+          <span className="font-bold shrink-0">${subtotal.toFixed(2)}</span>
+        </button>
+      </div>
+
       {/* ── Contenido principal ── */}
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
 
         {/* Panel productos */}
-        <section className="flex-1 min-h-0 flex flex-col overflow-hidden border-b lg:border-b-0 lg:border-r border-gray-200 bg-white">
+        <section className={`${mobileView === 'productos' ? 'flex' : 'hidden'} lg:flex flex-1 min-h-0 flex-col overflow-hidden border-b lg:border-b-0 lg:border-r border-gray-200 bg-white`}>
 
           {/* Búsqueda + adicional */}
           <div className="shrink-0 px-3 py-2 border-b border-gray-100 space-y-1.5">
@@ -900,20 +932,21 @@ export default function PosPage() {
         </section>
 
         {/* Panel carrito */}
-        <section className="flex-2 min-h-0 flex flex-col overflow-hidden lg:w-96 xl:w-104 lg:flex-none bg-white">
-          <div className="shrink-0 px-4 py-2.5 border-b border-indigo-100 bg-indigo-50 flex items-center gap-2">
-            <ReceiptText size={15} className="text-indigo-600 shrink-0" />
-            <h2 className="text-sm font-bold text-indigo-800 tracking-wide">Venta actual</h2>
+        <section className={`${mobileView === 'carrito' ? 'flex' : 'hidden'} lg:flex flex-1 min-h-0 flex-col overflow-hidden lg:w-105 xl:w-120 lg:flex-none bg-white lg:border-l lg:border-gray-200 lg:shadow-[-4px_0_16px_-8px_rgba(0,0,0,0.08)]`}>
+          <div className="shrink-0 px-4 py-2.5 border-b border-indigo-100 bg-linear-to-r from-indigo-600 to-indigo-500 flex items-center gap-2">
+            <ReceiptText size={17} className="text-white shrink-0" />
+            <h2 className="text-base font-bold text-white tracking-wide">Venta actual</h2>
             {carrito.length > 0 && (
               <>
-                <span className="text-xs bg-indigo-600 text-white font-bold px-2 py-0.5 rounded-full">
+                <span className="text-xs bg-white text-indigo-700 font-bold px-2 py-0.5 rounded-full">
                   {carrito.length}
                 </span>
+                <span className="ml-auto text-base font-extrabold text-white">${subtotal.toFixed(2)}</span>
                 <button
                   type="button"
                   onClick={() => setConfirmVaciarOpen(true)}
                   title="Vaciar carrito"
-                  className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-white/90 hover:bg-white/15"
                 >
                   <Trash2 size={13} />
                   <span className="hidden sm:inline">Vaciar</span>
@@ -922,85 +955,93 @@ export default function PosPage() {
             )}
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-50">
+          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100">
             {carrito.map((item) => (
-              <div key={item.producto.id} className="px-3 py-2">
-                <div className="flex items-start justify-between gap-1">
-                  <p className="text-sm font-medium text-gray-800 leading-tight flex-1 min-w-0 truncate">{item.producto.nombre}</p>
+              <div key={item.producto.id} className="px-4 py-2 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-800 leading-tight truncate">{item.producto.nombre}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="inline-flex items-center rounded-lg border border-gray-200">
+                      <button onClick={() => changeQty(item.producto.id, -1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
+                        <Minus size={12} />
+                      </button>
+                      <span className="px-2.5 text-xs font-semibold">{item.cantidad}</span>
+                      <button onClick={() => changeQty(item.producto.id, 1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                    {item.cantidad > 1 && (
+                      <span className="text-[11px] text-gray-400">${Number(item.producto.precio_actual).toFixed(2)} c/u</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-1 shrink-0">
                   <button
                     onClick={() => removeFromCart(item.producto.id)}
-                    className="p-0.5 rounded text-gray-400 hover:text-red-600 shrink-0 mt-0.5"
+                    className="p-0.5 rounded text-gray-300 hover:text-red-600 hover:bg-red-50"
                     title="Eliminar"
                   >
-                    <Trash2 size={13} />
+                    <Trash2 size={14} />
                   </button>
-                </div>
-                <div className="flex items-center justify-between mt-1.5">
-                  <div className="inline-flex items-center rounded border border-gray-200">
-                    <button onClick={() => changeQty(item.producto.id, -1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
-                      <Minus size={12} />
-                    </button>
-                    <span className="px-2 text-xs font-medium">{item.cantidad}</span>
-                    <button onClick={() => changeQty(item.producto.id, 1)} className="px-2 py-1 text-gray-600 hover:bg-gray-50">
-                      <Plus size={12} />
-                    </button>
-                  </div>
-                  <p className="text-sm font-semibold text-gray-800">
+                  <p className="text-sm font-bold text-gray-900">
                     ${(Number(item.producto.precio_actual) * item.cantidad).toFixed(2)}
                   </p>
                 </div>
               </div>
             ))}
             {!carrito.length && (
-              <div className="flex items-center justify-center h-20 text-sm text-gray-400">Agrega productos.</div>
+              <div className="flex flex-col items-center justify-center h-full min-h-40 text-gray-400 gap-2 px-6 text-center">
+                <ReceiptText size={32} className="text-gray-300" />
+                <p className="text-sm">Agrega productos para iniciar la venta.</p>
+              </div>
             )}
           </div>
 
-          <div className="shrink-0 p-3 border-t border-gray-100 space-y-2">
-            <p className="text-xs font-semibold text-gray-600 uppercase">Tipo de cobro</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setTipoCobro('CONTADO')}
-                className={`py-1.5 rounded-lg text-xs font-semibold border ${tipoCobro === 'CONTADO' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-              >Contado</button>
-              <button
-                type="button"
-                onClick={() => setTipoCobro('CREDITO')}
-                className={`py-1.5 rounded-lg text-xs font-semibold border ${tipoCobro === 'CREDITO' ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-              >Crédito</button>
+          <div className="shrink-0 border-t border-gray-100">
+            <div className="px-4 py-2 bg-gray-50 flex items-center justify-between">
+              <span className="text-xs text-gray-500">{totalItems} artículo{totalItems === 1 ? '' : 's'}</span>
+              <span className="text-xl font-extrabold text-gray-900">${subtotal.toFixed(2)}</span>
             </div>
-            {tipoCobro === 'CREDITO' && (
-              <select
-                value={clienteCreditoId}
-                onChange={(e) => setClienteCreditoId(e.target.value ? Number(e.target.value) : '')}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+            <div className="p-2.5 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold text-gray-500 uppercase shrink-0">Cobro</span>
+                <div className="flex-1 grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setTipoCobro('CONTADO')}
+                    className={`py-1.5 rounded-lg text-xs font-semibold border ${tipoCobro === 'CONTADO' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                  >Contado</button>
+                  <button
+                    type="button"
+                    onClick={() => setTipoCobro('CREDITO')}
+                    className={`py-1.5 rounded-lg text-xs font-semibold border ${tipoCobro === 'CREDITO' ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                  >Crédito</button>
+                </div>
+              </div>
+              {tipoCobro === 'CREDITO' && (
+                <select
+                  value={clienteCreditoId}
+                  onChange={(e) => setClienteCreditoId(e.target.value ? Number(e.target.value) : '')}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="">Seleccionar cliente...</option>
+                  {clientes.map((cliente) => (
+                    <option key={cliente.id} value={cliente.id}>
+                      {cliente.nombre}
+                      {cliente.saldo_deuda > 0 ? ` • Debe: $${Number(cliente.saldo_deuda).toFixed(2)}` : ' • Sin deuda'}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                onClick={finalizarVenta}
+                disabled={!carrito.length || !cajaAbierta}
+                className="w-full py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
+                title={!cajaAbierta ? 'Abre una caja para vender' : ''}
               >
-                <option value="">Seleccionar cliente...</option>
-                {clientes.map((cliente) => (
-                  <option key={cliente.id} value={cliente.id}>
-                    {cliente.nombre}
-                    {cliente.saldo_deuda > 0 ? ` • Debe: $${Number(cliente.saldo_deuda).toFixed(2)}` : ' • Sin deuda'}
-                  </option>
-                ))}
-              </select>
-            )}
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>Artículos</span>
-              <span>{totalItems}</span>
+                Finalizar venta
+              </button>
             </div>
-            <div className="flex justify-between text-base font-semibold text-gray-900">
-              <span>Total</span>
-              <span>${subtotal.toFixed(2)}</span>
-            </div>
-            <button
-              onClick={finalizarVenta}
-              disabled={!carrito.length || !cajaAbierta}
-              className="w-full py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
-              title={!cajaAbierta ? 'Abre una caja para vender' : ''}
-            >
-              Finalizar venta
-            </button>
           </div>
         </section>
       </div>
