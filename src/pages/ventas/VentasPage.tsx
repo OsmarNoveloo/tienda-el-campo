@@ -266,30 +266,32 @@ export default function VentasPage() {
                             <td colSpan={isAdmin ? 6 : 5} className="px-6 pb-4 pt-1">
                               {isLoadingThis || !detalle ? (
                                 <p className="text-xs text-gray-400 py-2">Cargando productos...</p>
-                              ) : detalle.length === 0 ? (
-                                <p className="text-xs text-gray-400 py-2">Sin productos registrados.</p>
                               ) : (
                                 <div className="rounded-lg border border-indigo-100 overflow-hidden">
-                                  <table className="w-full text-xs">
-                                    <thead className="bg-indigo-50 text-indigo-700">
-                                      <tr>
-                                        <th className="text-left px-3 py-2 font-semibold">Producto</th>
-                                        <th className="text-right px-3 py-2 font-semibold">Cant.</th>
-                                        <th className="text-right px-3 py-2 font-semibold">Precio</th>
-                                        <th className="text-right px-3 py-2 font-semibold">Subtotal</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-indigo-50 bg-white">
-                                      {detalle.map((item, i) => (
-                                        <tr key={i}>
-                                          <td className="px-3 py-2 text-gray-800 font-medium">{item.nombre}</td>
-                                          <td className="px-3 py-2 text-right text-gray-600">{item.cantidad}</td>
-                                          <td className="px-3 py-2 text-right text-gray-600">${item.precio_unitario.toFixed(2)}</td>
-                                          <td className="px-3 py-2 text-right font-semibold text-gray-800">${item.subtotal.toFixed(2)}</td>
+                                  {detalle.length === 0 ? (
+                                    <p className="text-xs text-gray-400 px-3 py-2 bg-white">Sin productos registrados.</p>
+                                  ) : (
+                                    <table className="w-full text-xs">
+                                      <thead className="bg-indigo-50 text-indigo-700">
+                                        <tr>
+                                          <th className="text-left px-3 py-2 font-semibold">Producto</th>
+                                          <th className="text-right px-3 py-2 font-semibold">Cant.</th>
+                                          <th className="text-right px-3 py-2 font-semibold">Precio</th>
+                                          <th className="text-right px-3 py-2 font-semibold">Subtotal</th>
                                         </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
+                                      </thead>
+                                      <tbody className="divide-y divide-indigo-50 bg-white">
+                                        {detalle.map((item, i) => (
+                                          <tr key={i}>
+                                            <td className="px-3 py-2 text-gray-800 font-medium">{item.nombre}</td>
+                                            <td className="px-3 py-2 text-right text-gray-600">{item.cantidad}</td>
+                                            <td className="px-3 py-2 text-right text-gray-600">${item.precio_unitario.toFixed(2)}</td>
+                                            <td className="px-3 py-2 text-right font-semibold text-gray-800">${item.subtotal.toFixed(2)}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
                                   {venta.observacion && (
                                     <p className="px-3 py-2 text-xs text-gray-500 bg-gray-50 border-t border-indigo-100">
                                       {venta.observacion}

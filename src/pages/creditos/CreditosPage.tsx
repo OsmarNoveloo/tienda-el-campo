@@ -23,6 +23,7 @@ import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { api } from '../../lib/apiClient'
+import CreditoCobroTerminal from '../../components/creditos/CreditoCobroTerminal'
 import { formatDateTime, formatDate } from '../../lib/dateUtils'
 import { normalizeSearchText } from '../../lib/searchUtils'
 import type { AbonoCredito, CreditoVenta, EstadoCredito } from '../../types/database'
@@ -104,6 +105,12 @@ export default function CreditosPage() {
   const [loadingClientesDeuda, setLoadingClientesDeuda] = useState(false)
   const [selectedClienteDeuda, setSelectedClienteDeuda] = useState<ClienteDeudaRow | null>(null)
   const [isClienteMode, setIsClienteMode] = useState(false)
+  const [pagoPendiente, setPagoPendiente] = useState<{
+    monto: number
+    descripcion: string
+    endpoint: string
+    body: Record<string, unknown>
+  } | null>(null)
   const deferredSearchTerm = useDeferredValue(searchTerm)
 
   const {
@@ -229,59 +236,74 @@ export default function CreditosPage() {
     reset({ monto: 0, observacion: '' })
   }
 
-  const submitAbono = async (values: AbonoFormOutput) => {
-    if (!user) {
-      toast.error('No hay sesión activa para registrar el abono')
-      return
-    }
+  const resolverPago = (values: AbonoFormOutput) => {
+    if (!user) { toast.error('No hay sesión activa para registrar el abono'); return null }
 
     if (isClienteMode && selectedClienteDeuda) {
       const saldoTotal = selectedClienteDeuda.total_deuda
       const montoFinal = actionMode === 'liquidar' ? saldoTotal : Number(values.monto)
 
-      if (montoFinal <= 0) { toast.error('El monto debe ser mayor a 0'); return }
-      if (montoFinal > saldoTotal + 0.001) { toast.error('El abono no puede superar la deuda total del cliente'); return }
+      if (montoFinal <= 0) { toast.error('El monto debe ser mayor a 0'); return null }
+      if (montoFinal > saldoTotal + 0.001) { toast.error('El abono no puede superar la deuda total del cliente'); return null }
 
-      try {
-        await api.post('/creditos/pagar-cliente', {
+      return {
+        monto: Number(montoFinal.toFixed(2)),
+        descripcion: selectedClienteDeuda.cliente_nombre,
+        endpoint: '/creditos/pagar-cliente',
+        body: {
           cliente_id: selectedClienteDeuda.cliente_id,
           monto: Number(montoFinal.toFixed(2)),
           observacion: values.observacion?.trim() || null,
           usuario_id: user.id,
-        })
-        toast.success(
-          actionMode === 'liquidar'
-            ? `Deuda de ${selectedClienteDeuda.cliente_nombre} liquidada`
-            : `Abono registrado para ${selectedClienteDeuda.cliente_nombre}`,
-        )
-        closeModal()
-        await Promise.all([loadClientesDeuda(), loadCreditos()])
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : 'Error al registrar pago')
+        },
       }
-      return
     }
 
-    if (!selectedCredito) { toast.error('Selecciona un crédito'); return }
+    if (!selectedCredito) { toast.error('Selecciona un crédito'); return null }
 
     const saldoDisponible = Number(selectedCredito.saldo_actual)
     const montoFinal = actionMode === 'liquidar' ? saldoDisponible : Number(values.monto)
 
-    if (montoFinal <= 0) { toast.error('El monto debe ser mayor a 0'); return }
-    if (montoFinal > saldoDisponible) { toast.error('El abono no puede ser mayor al saldo pendiente'); return }
+    if (montoFinal <= 0) { toast.error('El monto debe ser mayor a 0'); return null }
+    if (montoFinal > saldoDisponible) { toast.error('El abono no puede ser mayor al saldo pendiente'); return null }
 
-    try {
-      await api.post(`/creditos/${selectedCredito.id}/abonos`, {
+    return {
+      monto: Number(montoFinal.toFixed(2)),
+      descripcion: selectedCredito.cliente_nombre,
+      endpoint: `/creditos/${selectedCredito.id}/abonos`,
+      body: {
         monto: Number(montoFinal.toFixed(2)),
         observacion: values.observacion?.trim() || null,
         usuario_id: user.id,
-      })
-      toast.success(montoFinal >= saldoDisponible ? 'Crédito liquidado' : 'Abono registrado')
-      closeModal()
-      await loadCreditos()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Error al registrar abono')
+      },
     }
+  }
+
+  const submitAbono = async (values: AbonoFormOutput) => {
+    const pago = resolverPago(values)
+    if (!pago) return
+
+    try {
+      await api.post(pago.endpoint, pago.body)
+      toast.success(actionMode === 'liquidar' ? `Deuda de ${pago.descripcion} liquidada` : `Abono registrado para ${pago.descripcion}`)
+      closeModal()
+      if (isClienteMode) await Promise.all([loadClientesDeuda(), loadCreditos()])
+      else await loadCreditos()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al registrar pago')
+    }
+  }
+
+  const iniciarCobroTerminal = handleSubmit((values) => {
+    const pago = resolverPago(values)
+    if (!pago) return
+    setModalOpen(false)
+    setPagoPendiente(pago)
+  })
+
+  const handleCobroTerminalClose = () => {
+    setPagoPendiente(null)
+    closeModal()
   }
 
   const toggleExpand = (creditoId: number) => {
@@ -793,13 +815,22 @@ export default function CreditosPage() {
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-1">
+              <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={closeModal}
                   className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200"
                 >
                   Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void iniciarCobroTerminal()}
+                  disabled={isSubmitting || !canSubmitAbono}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                >
+                  <CreditCard size={14} />
+                  Con terminal
                 </button>
                 <button
                   type="submit"
@@ -827,6 +858,19 @@ export default function CreditosPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {pagoPendiente && (
+        <CreditoCobroTerminal
+          monto={pagoPendiente.monto}
+          descripcion={pagoPendiente.descripcion}
+          onAprobado={async () => {
+            await api.post(pagoPendiente.endpoint, pagoPendiente.body)
+            if (isClienteMode) await Promise.all([loadClientesDeuda(), loadCreditos()])
+            else await loadCreditos()
+          }}
+          onClose={handleCobroTerminalClose}
+        />
       )}
     </div>
   )
