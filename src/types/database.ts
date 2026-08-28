@@ -2,7 +2,7 @@
 
 export type EstadoUsuario = 'ACTIVO' | 'INACTIVO'
 export type TipoMovimiento = 'ENTRADA' | 'SALIDA' | 'AJUSTE'
-export type EstadoVenta = 'PAGADA' | 'CANCELADA'
+export type EstadoVenta = 'PENDIENTE' | 'PAGADA' | 'CANCELADA'
 export type EstadoCaja = 'ABIERTA' | 'CERRADA'
 export type EstadoCredito = 'PENDIENTE' | 'ABONANDO' | 'PAGADO' | 'VENCIDO' | 'CANCELADO'
 

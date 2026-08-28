@@ -1,7 +1,8 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight, Truck, PauseCircle } from 'lucide-react'
+import { useCallback, useDeferredValue, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
+import { ShoppingCart, Search, Plus, Minus, Trash2, ReceiptText, Wallet, AlertCircle, WifiOff, RefreshCw, ChevronLeft, ChevronRight, Truck, PauseCircle, CreditCard } from 'lucide-react'
 import PosPagosProveedores from '../../components/pos/PosPagosProveedores'
 import PosVentasEnEspera from '../../components/pos/PosVentasEnEspera'
+import PosCobroTerminal from '../../components/pos/PosCobroTerminal'
 import ConfirmDialog from '../../components/common/ConfirmDialog'
 import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
@@ -9,7 +10,7 @@ import { api } from '../../lib/apiClient'
 import { getLocalISOString } from '../../lib/dateUtils'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { normalizeSearchText } from '../../lib/searchUtils'
-import type { Producto } from '../../types/database'
+import type { Producto, Venta } from '../../types/database'
 import {
   saveProductosToCache, getProductosFromCache,
   saveClientesToCache, getClientesFromCache,
@@ -113,6 +114,8 @@ export default function PosPage() {
   const [pagosProvOpen, setPagosProvOpen] = useState(false)
   const [ventasEnEsperaOpen, setVentasEnEsperaOpen] = useState(false)
   const [confirmVaciarOpen, setConfirmVaciarOpen] = useState(false)
+  const [cobroTerminal, setCobroTerminal] = useState<{ ventaId: number; monto: number; folio: string } | null>(null)
+  const [iniciandoCobroTerminal, setIniciandoCobroTerminal] = useState(false)
   const [totalPagosProv, setTotalPagosProv] = useState(0)
   const [mobileView, setMobileView] = useState<'productos' | 'carrito'>('productos')
   const cajaRequestInFlight = useRef(false)
@@ -125,7 +128,6 @@ export default function PosPage() {
   const barcodeBufferRef = useRef('')
   const barcodeLastKeyRef = useRef(0)
   const barcodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const globalKeyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {})
 
   const subtotal = useMemo(
     () => carrito.reduce((acc, item) => acc + Number(item.producto.precio_actual) * item.cantidad, 0),
@@ -139,6 +141,11 @@ export default function PosPage() {
 
   const deferredSearch = useDeferredValue(search)
   const [productoPage, setProductoPage] = useState(1)
+  const [productoPageResetKey, setProductoPageResetKey] = useState(deferredSearch)
+  if (deferredSearch !== productoPageResetKey) {
+    setProductoPageResetKey(deferredSearch)
+    setProductoPage(1)
+  }
 
   const productosNorm = useMemo(
     () => productos.map((p) => ({
@@ -157,8 +164,6 @@ export default function PosPage() {
       .filter(({ n, s, b }) => n.includes(term) || s.includes(term) || b.includes(term))
       .map(({ p }) => p)
   }, [productos, productosNorm, deferredSearch])
-
-  useEffect(() => { setProductoPage(1) }, [deferredSearch])
 
   const productosTotalPages = useMemo(
     () => Math.max(1, Math.ceil(productosFiltrados.length / PRODUCTOS_PAGE_SIZE)),
@@ -182,6 +187,7 @@ export default function PosPage() {
   }
 
   const handleSearchChange = (value: string) => {
+    // eslint-disable-next-line react-hooks/purity -- handler de evento (onChange), nunca se invoca durante el render
     const now = Date.now()
     const previous = searchTypingMeta.current.prevValue
     const growing = value.length >= previous.length && value.startsWith(previous)
@@ -237,7 +243,7 @@ export default function PosPage() {
         setProductos(data)
         void saveProductosToCache(data)
       }
-    } catch (err) {
+    } catch {
       if (cached.length === 0) toast.error('No se pudieron cargar los productos')
     } finally {
       setLoading(false)
@@ -322,14 +328,17 @@ export default function PosPage() {
   }, [])
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- sincroniza el carrito local con el cierre de caja detectado por polling; no hay prop/estado del que derivarlo en render */
     if (cajaAbierta === null && cajaLoading === false) {
       setCarrito([])
       setCarritosEnEspera([])
       setSummary(initialSummary)
     }
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [cajaAbierta, cajaLoading])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial de datos del servidor al montar
     loadClientes()
     loadProductos()
     verificarCajaAbierta(true)
@@ -356,6 +365,7 @@ export default function PosPage() {
   }, [config.pauseRefreshOnHiddenTab, verificarCajaAbierta])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial/reactiva del resumen del día desde el servidor
     void loadSummary()
   }, [loadSummary])
 
@@ -366,12 +376,6 @@ export default function PosPage() {
     }, SUMMARY_POLL_MS)
     return () => clearInterval(interval)
   }, [SUMMARY_POLL_MS, config.pauseRefreshOnHiddenTab, loadSummary])
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => globalKeyHandlerRef.current(e)
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [])
 
   const addToCart = (producto: Producto) => {
     setCarrito((prev) => {
@@ -601,6 +605,90 @@ export default function PosPage() {
     })()
   }
 
+  const cobrarConTerminal = async () => {
+    if (!user) { toast.error('No hay sesión activa para registrar la venta.'); return }
+    if (!cajaAbierta) { toast.error('No hay caja abierta. Abre una caja desde el módulo Caja.'); return }
+    if (carrito.length === 0) { toast.info('Agrega productos al carrito.'); return }
+    if (!navigator.onLine) { toast.error('Se necesita conexión a internet para cobrar con la terminal.'); return }
+
+    const folio = generateFolio()
+    const total = Number(subtotal.toFixed(2))
+    const regularItems = carrito.filter((item) => !item.isQuickItem)
+    const quickItems = carrito.filter((item) => item.isQuickItem)
+
+    let observacion = 'Cobro con tarjeta (terminal)'
+    if (quickItems.length > 0) {
+      const quickText = `Adicionales: ${quickItems
+        .map((item) => `${item.quickCode ?? 'SIN-CODIGO'}:$${(Number(item.producto.precio_actual) * Number(item.cantidad)).toFixed(2)}`)
+        .join(', ')}`
+      observacion = `${observacion} | ${quickText}`
+    }
+
+    const ventaPayload = {
+      caja_sesion_id: cajaAbierta.id,
+      usuario_id: user.id,
+      folio,
+      subtotal: total,
+      descuento: 0,
+      impuesto: 0,
+      total,
+      estado: 'PENDIENTE' as const,
+      observacion,
+      fecha_venta: getLocalISOString(),
+    }
+
+    const detallePayload = regularItems.map((item) => {
+      const precio = Number(item.producto.precio_actual)
+      const cantidad = Number(item.cantidad)
+      return {
+        producto_id: item.producto.id,
+        cantidad,
+        precio_unitario: precio,
+        descuento: 0,
+        subtotal: Number((precio * cantidad).toFixed(2)),
+        costo_unitario: Number(item.producto.costo_actual),
+      }
+    })
+
+    const movimientosPayload = regularItems.map((item) => ({
+      producto_id: item.producto.id,
+      usuario_id: user.id,
+      tipo: 'SALIDA',
+      cantidad: Number(item.cantidad),
+      costo_unitario: Number(item.producto.costo_actual),
+      referencia_tipo: 'VENTA',
+      observacion: `Salida por venta ${folio}`,
+      fecha_movimiento: getLocalISOString(),
+    }))
+
+    setIniciandoCobroTerminal(true)
+    try {
+      const venta = await api.post<Venta>('/ventas', {
+        ...ventaPayload,
+        detalle: detallePayload,
+        movimientos: movimientosPayload,
+        credito: null,
+      })
+      setCobroTerminal({ ventaId: venta.id, monto: total, folio })
+    } catch (err) {
+      toast.error((err as Error).message ?? 'No se pudo iniciar el cobro con tarjeta.')
+    } finally {
+      setIniciandoCobroTerminal(false)
+    }
+  }
+
+  const handleCobroTerminalSuccess = () => {
+    setCobroTerminal(null)
+    setCarrito([])
+    setTipoCobro('CONTADO')
+    setClienteCreditoId('')
+    void loadSummary()
+  }
+
+  const handleCobroTerminalClose = () => {
+    setCobroTerminal(null)
+  }
+
   const hacerCorte = async () => {
     if (!user) { toast.error('No hay sesión activa para hacer corte.'); return }
     if (!cajaAbierta) { toast.error('No hay caja abierta para hacer corte.'); return }
@@ -622,7 +710,9 @@ export default function PosPage() {
     }
   }
 
-  globalKeyHandlerRef.current = (e: KeyboardEvent) => {
+  const handleGlobalKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    if (cobroTerminal) return
+
     const target = e.target as HTMLElement
 
     if (e.key === 'Escape') {
@@ -672,7 +762,12 @@ export default function PosPage() {
         searchInputRef.current?.focus()
       }
     }
-  }
+  })
+
+  useEffect(() => {
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [])
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-gray-50">
@@ -1033,14 +1128,25 @@ export default function PosPage() {
                   ))}
                 </select>
               )}
-              <button
-                onClick={finalizarVenta}
-                disabled={!carrito.length || !cajaAbierta}
-                className="w-full py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
-                title={!cajaAbierta ? 'Abre una caja para vender' : ''}
-              >
-                Finalizar venta
-              </button>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={finalizarVenta}
+                  disabled={!carrito.length || !cajaAbierta}
+                  className="flex-1 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
+                  title={!cajaAbierta ? 'Abre una caja para vender' : ''}
+                >
+                  Finalizar venta
+                </button>
+                <button
+                  onClick={() => void cobrarConTerminal()}
+                  disabled={!carrito.length || !cajaAbierta || iniciandoCobroTerminal}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 shadow-sm"
+                  title={!cajaAbierta ? 'Abre una caja para vender' : ''}
+                >
+                  <CreditCard size={15} />
+                  {iniciandoCobroTerminal ? 'Enviando...' : 'Cobrar con terminal'}
+                </button>
+              </div>
             </div>
           </div>
         </section>
@@ -1056,6 +1162,16 @@ export default function PosPage() {
           onReanudar={reanudarCarritoEnEspera}
           onDescartar={descartarCarritoEnEspera}
           onClose={() => setVentasEnEsperaOpen(false)}
+        />
+      )}
+
+      {cobroTerminal && (
+        <PosCobroTerminal
+          ventaId={cobroTerminal.ventaId}
+          monto={cobroTerminal.monto}
+          folio={cobroTerminal.folio}
+          onSuccess={handleCobroTerminalSuccess}
+          onClose={handleCobroTerminalClose}
         />
       )}
 
