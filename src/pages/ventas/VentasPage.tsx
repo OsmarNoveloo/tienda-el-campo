@@ -249,7 +249,13 @@ export default function VentasPage() {
                           {isAdmin && <td className="px-4 py-3 text-gray-600">{venta.usuario_nombre}</td>}
                           <td className="px-4 py-3 text-right font-semibold text-gray-800">${Number(venta.total).toFixed(2)}</td>
                           <td className="px-4 py-3 text-center">
-                            <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${venta.estado === 'PAGADA' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                            <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${
+                              venta.estado === 'PAGADA'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : venta.estado === 'PENDIENTE'
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-red-100 text-red-700'
+                            }`}>
                               {venta.estado}
                             </span>
                           </td>
