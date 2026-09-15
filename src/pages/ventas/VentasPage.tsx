@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { Receipt, Search, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, CalendarDays } from 'lucide-react'
+import { Receipt, Search, RefreshCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, CalendarDays, CreditCard } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { api } from '../../lib/apiClient'
 import { useAuth } from '../../context/AuthContext'
@@ -48,6 +48,7 @@ export default function VentasPage() {
   const [loadingDetalle, setLoadingDetalle] = useState<number | null>(null)
   const detalleCacheRef = useRef<Map<number, DetalleItem[]>>(new Map())
   const [detalleVersion, setDetalleVersion] = useState(0)
+  const [reconciliandoId, setReconciliandoId] = useState<number | null>(null)
   const deferredSearch = useDeferredValue(search)
 
   const loadVentas = useCallback(async () => {
@@ -118,6 +119,23 @@ export default function VentasPage() {
     }
     setExpandedId(ventaId)
     await loadDetalle(ventaId)
+  }
+
+  const verificarPago = async (ventaId: number) => {
+    setReconciliandoId(ventaId)
+    try {
+      const result = await api.post<{ ok: boolean; ventaEstado: string }>(`/mercadopago/pago/venta/${ventaId}/reconciliar`)
+      if (result.ventaEstado === 'PAGADA') {
+        toast.success('Pago confirmado, la venta ya quedó como pagada')
+        await loadVentas()
+      } else {
+        toast.info('Mercado Pago todavía no reporta el pago como completado')
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo verificar el pago')
+    } finally {
+      setReconciliandoId(null)
+    }
   }
 
   useEffect(() => {
@@ -257,15 +275,31 @@ export default function VentasPage() {
                           {isAdmin && <td className="px-4 py-3 text-gray-600">{venta.usuario_nombre}</td>}
                           <td className="px-4 py-3 text-right font-semibold text-gray-800">${Number(venta.total).toFixed(2)}</td>
                           <td className="px-4 py-3 text-center">
-                            <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${
-                              venta.estado === 'PAGADA'
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : venta.estado === 'PENDIENTE'
-                                  ? 'bg-amber-100 text-amber-700'
-                                  : 'bg-red-100 text-red-700'
-                            }`}>
-                              {venta.estado}
-                            </span>
+                            <div className="inline-flex flex-col items-center gap-1">
+                              <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${
+                                venta.estado === 'PAGADA'
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : venta.estado === 'PENDIENTE'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-red-100 text-red-700'
+                              }`}>
+                                {venta.estado}
+                              </span>
+                              {venta.estado === 'PENDIENTE' && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); void verificarPago(venta.id) }}
+                                  disabled={reconciliandoId === venta.id}
+                                  className="inline-flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+                                >
+                                  {reconciliandoId === venta.id
+                                    ? <RefreshCw size={11} className="animate-spin" />
+                                    : <CreditCard size={11} />
+                                  }
+                                  Verificar pago
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
 
