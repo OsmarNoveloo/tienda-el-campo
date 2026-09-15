@@ -942,6 +942,7 @@ export default function PosPage() {
                   const val = event.target.value
                   const intPart = val.split('.')[0].replace('-', '')
                   if (intPart.length > 5) {
+                    setProductoRapidoPrecio('')
                     if (!tryAddByBarcode(val)) {
                       setSearch(val)
                       searchInputRef.current?.focus()

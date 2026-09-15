@@ -40,6 +40,7 @@ export default function VentasPage() {
   const [totalCount, setTotalCount] = useState(0)
   const [sumTotal, setSumTotal] = useState(0)
   const [totalPagadas, setTotalPagadas] = useState(0)
+  const [sumTarjeta, setSumTarjeta] = useState(0)
   const [pageSize, setPageSize] = useState(20)
   const [fechaDesde, setFechaDesde] = useState(todayStr())
   const [fechaHasta, setFechaHasta] = useState(todayStr())
@@ -63,22 +64,25 @@ export default function VentasPage() {
         ...(fechaHasta ? { fechaHasta } : {}),
         ...(!isAdmin && user ? { usuario_id: String(user.id) } : {}),
       })
-      const { items, total, sumTotal, totalPagadas } = await api.get<{
+      const { items, total, sumTotal, totalPagadas, sumTarjeta } = await api.get<{
         items: VentaRow[]
         total: number
         sumTotal: number
         totalPagadas: number
+        sumTarjeta: number
       }>(`/ventas?${params}`)
       setVentas(items)
       setTotalCount(total)
       setSumTotal(sumTotal)
       setTotalPagadas(totalPagadas)
+      setSumTarjeta(sumTarjeta)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Error cargando ventas')
       setVentas([])
       setTotalCount(0)
       setSumTotal(0)
       setTotalPagadas(0)
+      setSumTarjeta(0)
     } finally {
       setLoading(false)
     }
@@ -143,7 +147,7 @@ export default function VentasPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-gray-100 p-4">
           <p className="text-xs text-gray-500">Registros</p>
           <p className="text-2xl font-bold text-gray-800">{totalCount}</p>
@@ -155,6 +159,10 @@ export default function VentasPage() {
         <div className="bg-white rounded-xl border border-gray-100 p-4">
           <p className="text-xs text-gray-500">Monto total</p>
           <p className="text-2xl font-bold text-indigo-700">${sumTotal.toFixed(2)}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-4">
+          <p className="text-xs text-gray-500">Vendido con tarjeta</p>
+          <p className="text-2xl font-bold text-sky-700">${sumTarjeta.toFixed(2)}</p>
         </div>
       </div>
 

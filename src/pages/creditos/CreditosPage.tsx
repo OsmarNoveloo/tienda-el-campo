@@ -298,7 +298,7 @@ export default function CreditosPage() {
     const pago = resolverPago(values)
     if (!pago) return
     setModalOpen(false)
-    setPagoPendiente(pago)
+    setPagoPendiente({ ...pago, body: { ...pago.body, es_tarjeta: true } })
   })
 
   const handleCobroTerminalClose = () => {
