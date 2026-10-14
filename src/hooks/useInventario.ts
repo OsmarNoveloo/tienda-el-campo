@@ -21,6 +21,7 @@ export type MovimientoRow = {
 export type StockProducto = {
   producto_id: number
   producto_nombre: string
+  codigo_barras?: string | null
   stock_minimo: number
   stock_actual: number
   precio_actual: number
@@ -35,6 +36,13 @@ export type StockPageParams = {
 export type StockPageResult = {
   items: StockProducto[]
   total: number
+}
+
+export type ModoLote = 'ENTRADA' | 'CONTEO'
+
+export type LoteResult = {
+  registrados: number
+  sinCambios: number
 }
 
 export function useInventario() {
@@ -89,9 +97,34 @@ export function useInventario() {
     return api.get<{ count: number }>('/inventario/stock/bajo').then(({ count }) => count)
   }, [])
 
+  const buscarPorCodigo = useCallback((codigo: string): Promise<StockProducto> => {
+    return api.get<StockProducto>(`/inventario/stock/codigo/${encodeURIComponent(codigo)}`)
+  }, [])
+
+  const registrarLote = useCallback(async (payload: {
+    modo: ModoLote
+    items: { producto_id: number; cantidad: number }[]
+    observacion?: string | null
+  }): Promise<LoteResult> => {
+    const result = await api.post<LoteResult>('/inventario/lote', payload)
+    await loadMovimientos()
+    return result
+  }, [loadMovimientos])
+
   useEffect(() => {
     loadMovimientos()
   }, [loadMovimientos])
 
-  return { movimientos, loading, error, crearMovimiento, loadMovimientos, loadStockActual, loadStockPage, loadStockLowCount }
+  return {
+    movimientos,
+    loading,
+    error,
+    crearMovimiento,
+    loadMovimientos,
+    loadStockActual,
+    loadStockPage,
+    loadStockLowCount,
+    buscarPorCodigo,
+    registrarLote,
+  }
 }
