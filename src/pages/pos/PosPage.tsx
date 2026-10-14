@@ -128,6 +128,7 @@ export default function PosPage() {
   const barcodeBufferRef = useRef('')
   const barcodeLastKeyRef = useRef(0)
   const barcodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scanIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const subtotal = useMemo(
     () => carrito.reduce((acc, item) => acc + Number(item.producto.precio_actual) * item.cantidad, 0),
@@ -186,12 +187,46 @@ export default function PosPage() {
     return true
   }
 
+  // Intenta agregar lo que mandó el lector. Si el lector leyó dos veces seguidas
+  // ("75011... 75011..." pegados) agrega el producto una sola vez.
+  const tryAddScannedCode = (rawCode: string) => {
+    const code = rawCode.trim()
+    if (tryAddByBarcode(code)) return true
+    if (code.length >= 12 && code.length % 2 === 0) {
+      const half = code.slice(0, code.length / 2)
+      if (half === code.slice(code.length / 2) && tryAddByBarcode(half)) return true
+    }
+    return false
+  }
+
+  // Un código leído que no existe: avisa y limpia el buscador para que la siguiente
+  // lectura no se pegue a la anterior en una línea larga
+  const notifyBarcodeNotFound = (rawCode: string) => {
+    const code = rawCode.trim()
+    if (scanIdleTimerRef.current) {
+      clearTimeout(scanIdleTimerRef.current)
+      scanIdleTimerRef.current = null
+    }
+    setSearch('')
+    searchTypingMeta.current = { lastTs: 0, isRapidSequence: true, prevValue: '' }
+    navigator.vibrate?.([80, 60, 80])
+    const shown = code.length > 20 ? `${code.slice(0, 20)}…` : code
+    toast.warning(`Producto no encontrado: ${shown}`, { toastId: `pos-no-encontrado-${code}`, autoClose: 2500 })
+  }
+
+  const looksLikeBarcode = (value: string) => /^\d{6,}$/.test(value.trim())
+
   const handleSearchChange = (value: string) => {
     // eslint-disable-next-line react-hooks/purity -- handler de evento (onChange), nunca se invoca durante el render
     const now = Date.now()
     const previous = searchTypingMeta.current.prevValue
     const growing = value.length >= previous.length && value.startsWith(previous)
     const jump = value.length - previous.length
+
+    if (scanIdleTimerRef.current) {
+      clearTimeout(scanIdleTimerRef.current)
+      scanIdleTimerRef.current = null
+    }
 
     if (!value) {
       searchTypingMeta.current = { lastTs: now, isRapidSequence: true, prevValue: '' }
@@ -201,7 +236,18 @@ export default function PosPage() {
 
     if (jump > 1 && growing) {
       searchTypingMeta.current = { lastTs: now, isRapidSequence: true, prevValue: value }
-      if (!tryAddByBarcode(value)) setSearch(value)
+      if (tryAddScannedCode(value)) return
+      // El lector escribió encima de un texto que ya estaba: prueba solo lo nuevo
+      const added = value.slice(previous.length)
+      if (previous && looksLikeBarcode(added)) {
+        if (!tryAddScannedCode(added)) notifyBarcodeNotFound(added)
+        return
+      }
+      if (looksLikeBarcode(value)) {
+        notifyBarcodeNotFound(value)
+        return
+      }
+      setSearch(value)
       return
     }
 
@@ -220,6 +266,15 @@ export default function PosPage() {
     if (isRapid && value.length >= 6 && tryAddByBarcode(value)) return
 
     setSearch(value)
+
+    // Una ráfaga del lector que termina sin coincidir con ningún producto
+    if (isRapid && value.length >= 6) {
+      scanIdleTimerRef.current = setTimeout(() => {
+        scanIdleTimerRef.current = null
+        if (searchTypingMeta.current.prevValue !== value) return
+        if (!tryAddScannedCode(value)) notifyBarcodeNotFound(value)
+      }, 150)
+    }
   }
 
   const loadProductos = useCallback(async () => {
@@ -741,8 +796,8 @@ export default function PosPage() {
         const code = barcodeBufferRef.current.trim()
         barcodeBufferRef.current = ''
         barcodeLastKeyRef.current = 0
-        if (code.length >= 4 && !tryAddByBarcode(code)) {
-          setSearch(code)
+        if (code.length >= 4 && !tryAddScannedCode(code)) {
+          notifyBarcodeNotFound(code)
           searchInputRef.current?.focus()
         }
       }, 80)
@@ -757,8 +812,8 @@ export default function PosPage() {
       const code = barcodeBufferRef.current.trim()
       barcodeBufferRef.current = ''
       barcodeLastKeyRef.current = 0
-      if (code.length >= 4 && !tryAddByBarcode(code)) {
-        setSearch(code)
+      if (code.length >= 4 && !tryAddScannedCode(code)) {
+        notifyBarcodeNotFound(code)
         searchInputRef.current?.focus()
       }
     }
@@ -927,7 +982,7 @@ export default function PosPage() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault()
-                    void tryAddByBarcode(search)
+                    if (!tryAddScannedCode(search) && looksLikeBarcode(search)) notifyBarcodeNotFound(search)
                   }
                 }}
                 placeholder="Nombre, SKU o código de barras"
@@ -943,10 +998,8 @@ export default function PosPage() {
                   const intPart = val.split('.')[0].replace('-', '')
                   if (intPart.length > 5) {
                     setProductoRapidoPrecio('')
-                    if (!tryAddByBarcode(val)) {
-                      setSearch(val)
-                      searchInputRef.current?.focus()
-                    }
+                    if (!tryAddScannedCode(val)) notifyBarcodeNotFound(val)
+                    searchInputRef.current?.focus()
                     return
                   }
                   setProductoRapidoPrecio(val)
