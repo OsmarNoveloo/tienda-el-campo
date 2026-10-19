@@ -48,7 +48,7 @@ export function useCaja() {
 
   const cerrarCaja = async (
     cajaId: number,
-    payload: { empleado_cierre_id: number; total_efectivo: number; total_tarjeta: number; observaciones?: string },
+    payload: { empleado_cierre_id: number; efectivo_contado: number | null; observaciones?: string },
   ) => {
     setLoading(true)
     try {

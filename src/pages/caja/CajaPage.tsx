@@ -16,10 +16,16 @@ const abrirSchema = z.object({
 })
 
 const cerrarSchema = z.object({
-  total_efectivo: z.coerce.number().nonnegative('Total efectivo no puede ser negativo'),
-  total_tarjeta: z.coerce.number().nonnegative('Total tarjeta no puede ser negativo'),
+  efectivo_contado: z.coerce.number().nonnegative('El efectivo contado no puede ser negativo'),
   observacion: z.string().optional(),
 })
+
+type ResumenCaja = {
+  ventasHoy: number
+  montoHoy: number
+  totalEfectivo: number
+  totalTarjeta: number
+}
 
 type AbrirInput = z.input<typeof abrirSchema>
 type AbrirOutput = z.output<typeof abrirSchema>
@@ -35,6 +41,7 @@ export default function CajaPage() {
 
   const { cajaActual, cortes, loading, error, abrirCaja, cerrarCaja, recalcularCorte, refetch } = useCaja()
   const [recalculandoId, setRecalculandoId] = useState<number | null>(null)
+  const [resumenCierre, setResumenCierre] = useState<ResumenCaja | null>(null)
 
   const {
     register: registerAbrir,
@@ -51,12 +58,31 @@ export default function CajaPage() {
     register: registerCerrar,
     handleSubmit: handleSubmitCerrar,
     reset: resetCerrar,
+    watch: watchCerrar,
     formState: { errors: errorsCerrar, isSubmitting: isSubmittingCerrar, isValid: isValidCerrar },
   } = useForm<CerrarInput, unknown, CerrarOutput>({
     resolver: zodResolver(cerrarSchema),
     mode: 'onChange',
-    defaultValues: { total_efectivo: 0, total_tarjeta: 0, observacion: '' },
+    defaultValues: { efectivo_contado: 0, observacion: '' },
   })
+
+  // Lo que debería haber en caja según las ventas, para comparar con lo contado
+  const abrirModalCerrar = async () => {
+    if (!cajaActual) return
+    setResumenCierre(null)
+    setModalCerrarOpen(true)
+    try {
+      setResumenCierre(await api.get<ResumenCaja>(`/caja/${cajaActual.id}/resumen`))
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo calcular el resumen de la caja')
+    }
+  }
+
+  const efectivoEsperado = cajaActual && resumenCierre
+    ? Number(cajaActual.monto_apertura) + resumenCierre.totalEfectivo
+    : null
+  const efectivoContadoActual = Number(watchCerrar('efectivo_contado') ?? 0)
+  const diferenciaCierre = efectivoEsperado === null ? null : efectivoContadoActual - efectivoEsperado
 
   const loadUsuarios = useCallback(async () => {
     try {
@@ -105,8 +131,7 @@ export default function CajaPage() {
 
       await cerrarCaja(cajaActual.id, {
         empleado_cierre_id: user.id,
-        total_efectivo: values.total_efectivo,
-        total_tarjeta: values.total_tarjeta,
+        efectivo_contado: values.efectivo_contado,
         observaciones: values.observacion,
       })
       toast.success('Caja cerrada')
@@ -134,7 +159,7 @@ export default function CajaPage() {
             </button>
           ) : (
             <button
-              onClick={() => setModalCerrarOpen(true)}
+              onClick={() => void abrirModalCerrar()}
               className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700"
             >
               <Lock size={16} /> Cerrar caja
@@ -263,6 +288,7 @@ export default function CajaPage() {
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">Ventas</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">Efectivo</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">Tarjeta</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">Diferencia</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Fecha</th>
                   <th className="px-4 py-3"></th>
                 </tr>
@@ -278,6 +304,9 @@ export default function CajaPage() {
                     </td>
                     <td className="px-4 py-3 text-right text-blue-600 font-medium">
                       ${Number(corte.total_tarjeta).toFixed(2)}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-medium ${Number(corte.diferencia) < 0 ? 'text-red-600' : Number(corte.diferencia) > 0 ? 'text-blue-600' : 'text-gray-500'}`}>
+                      ${Number(corte.diferencia ?? 0).toFixed(2)}
                     </td>
                     <td className="px-4 py-3 text-gray-600 text-xs">
                       {formatDateTime(corte.fecha_corte)}
@@ -307,7 +336,7 @@ export default function CajaPage() {
                 ))}
                 {!cortes.length && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
+                    <td colSpan={8} className="px-4 py-8 text-center text-gray-400">
                       No hay cortes registrados.
                     </td>
                   </tr>
@@ -392,31 +421,42 @@ export default function CajaPage() {
                 <p className="mt-1">
                   Monto apertura: <span className="font-semibold">${Number(cajaActual.monto_apertura).toFixed(2)}</span>
                 </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Total efectivo ($)</label>
-                <input
-                  {...registerCerrar('total_efectivo')}
-                  type="number"
-                  step="0.01"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-                {errorsCerrar.total_efectivo && (
-                  <p className="text-xs text-red-500 mt-1">{errorsCerrar.total_efectivo.message}</p>
+                {resumenCierre ? (
+                  <>
+                    <p className="mt-1">
+                      Ventas ({resumenCierre.ventasHoy}): <span className="font-semibold">${resumenCierre.montoHoy.toFixed(2)}</span>
+                    </p>
+                    <p className="mt-1">
+                      Cobrado con tarjeta: <span className="font-semibold">${resumenCierre.totalTarjeta.toFixed(2)}</span>
+                    </p>
+                    <p className="mt-1">
+                      Efectivo esperado en caja: <span className="font-semibold">${(efectivoEsperado ?? 0).toFixed(2)}</span>
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-1">Calculando ventas de la caja...</p>
                 )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Total tarjeta ($)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Efectivo contado en caja ($)</label>
                 <input
-                  {...registerCerrar('total_tarjeta')}
+                  {...registerCerrar('efectivo_contado')}
                   type="number"
                   step="0.01"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
-                {errorsCerrar.total_tarjeta && (
-                  <p className="text-xs text-red-500 mt-1">{errorsCerrar.total_tarjeta.message}</p>
+                {errorsCerrar.efectivo_contado && (
+                  <p className="text-xs text-red-500 mt-1">{errorsCerrar.efectivo_contado.message}</p>
+                )}
+                {diferenciaCierre !== null && (
+                  <p className={`text-xs mt-1 font-medium ${Math.abs(diferenciaCierre) < 0.01 ? 'text-emerald-600' : diferenciaCierre > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                    {Math.abs(diferenciaCierre) < 0.01
+                      ? 'La caja cuadra'
+                      : diferenciaCierre > 0
+                        ? `Sobran $${diferenciaCierre.toFixed(2)}`
+                        : `Faltan $${Math.abs(diferenciaCierre).toFixed(2)}`}
+                  </p>
                 )}
               </div>
 

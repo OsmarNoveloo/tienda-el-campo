@@ -15,7 +15,7 @@ import {
   saveProductosToCache, getProductosFromCache,
   saveClientesToCache, getClientesFromCache,
   saveCajaToCache, getCajaFromCache,
-  queueVenta, isNetworkError,
+  queueVenta, isRetryableError,
 } from '../../lib/posOfflineDB'
 import { usePosOfflineSync } from '../../hooks/usePosOfflineSync'
 
@@ -61,7 +61,6 @@ const initialSummary: DailySummary = {
 }
 
 const PRODUCTOS_PAGE_SIZE = 20
-const SALE_TIMEOUT_MS = 4000
 
 function generateFolio() {
   const now = new Date()
@@ -72,7 +71,10 @@ function generateFolio() {
   const hh = pad(now.getHours())
   const mm = pad(now.getMinutes())
   const ss = pad(now.getSeconds())
-  return `VTA-${YYYY}${MM}${DD}-${hh}${mm}${ss}`
+  // El sufijo evita que dos ventas en el mismo segundo (ej. dos cajas) tengan el mismo folio;
+  // el backend usa el folio para no duplicar ventas que se reenvían desde la cola offline
+  const rand = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
+  return `VTA-${YYYY}${MM}${DD}-${hh}${mm}${ss}-${rand}`
 }
 
 function generateHeldId() {
@@ -638,9 +640,6 @@ export default function PosPage() {
         return
       }
 
-      const controller = new AbortController()
-      const abortTimer = setTimeout(() => controller.abort(), SALE_TIMEOUT_MS)
-
       try {
         await api.post('/ventas', {
           ...ventaPayload,
@@ -648,13 +647,15 @@ export default function PosPage() {
           movimientos: movimientosPayload,
           credito: creditoPayload,
         })
-        clearTimeout(abortTimer)
       } catch (err) {
-        clearTimeout(abortTimer)
-        if (isNetworkError(err)) {
+        // Reenviar es seguro: el backend no duplica una venta con el mismo folio
+        if (isRetryableError(err)) {
           await encolarOffline()
         } else {
-          toast.error((err as Error).message ?? 'No se pudo guardar la venta.')
+          toast.error(
+            `La venta ${folio} ($${total.toFixed(2)}) NO se guardó: ${(err as Error).message ?? 'error desconocido'}. Vuelve a registrarla.`,
+            { autoClose: false },
+          )
         }
       }
     })()
@@ -751,9 +752,9 @@ export default function PosPage() {
     setHaciendoCorte(true)
     try {
       await api.post(`/caja/cerrar/${cajaAbierta.id}`, {
+        // Los totales (efectivo y tarjeta) los calcula el backend con las ventas de la sesión
         empleado_cierre_id: user.id,
-        total_efectivo: Number(summary.montoHoy.toFixed(2)),
-        total_tarjeta: 0,
+        efectivo_contado: null,
         observaciones: 'Corte generado desde POS',
       })
       toast.success('Corte de caja realizado.')

@@ -32,11 +32,15 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
     }
   }
 
-  const cancelarVentaPendiente = async () => {
+  // El backend cancela también la orden en Mercado Pago y regresa el inventario. Si el cobro
+  // sigue activo en la terminal o ya se aprobó, rechaza la cancelación para no perder un pago.
+  const cancelarVentaPendiente = async (): Promise<boolean> => {
     try {
       await api.patch(`/ventas/${ventaId}/cancelar`)
-    } catch {
-      // si falla, la venta queda pendiente para revisión manual
+      return true
+    } catch (err) {
+      toast.warning((err as Error).message ?? 'No se pudo cancelar la venta', { autoClose: 6000 })
+      return false
     }
   }
 
@@ -93,17 +97,15 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ventaId, monto, folio, intento])
 
+  // El polling sigue mientras se cancela: si el cliente paga en ese momento se detecta como aprobado
   const handleCancelar = async () => {
     setCancelando(true)
-    stopPolling()
-    try {
-      if (orderIdRef.current) {
-        await api.delete(`/mercadopago/pago/${orderIdRef.current}`)
-      }
-    } catch {
-      // si ya está en la terminal, Mercado Pago rechaza el cancel por API; se resuelve desde el dispositivo
+    const ok = await cancelarVentaPendiente()
+    if (!ok) {
+      setCancelando(false)
+      return
     }
-    await cancelarVentaPendiente()
+    stopPolling()
     toast.info('Cobro cancelado')
     onClose()
   }
@@ -117,8 +119,10 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
 
   const handleCancelarVenta = async () => {
     setCancelando(true)
-    await cancelarVentaPendiente()
-    toast.info('Cobro cancelado')
+    const ok = await cancelarVentaPendiente()
+    setCancelando(false)
+    if (!ok) return
+    toast.info('Venta cancelada')
     onClose()
   }
 

@@ -5,6 +5,7 @@ import { api } from '../../lib/apiClient'
 import { useAuth } from '../../context/AuthContext'
 import { normalizeSearchText } from '../../lib/searchUtils'
 import { formatDateTime } from '../../lib/dateUtils'
+import ConfirmDialog from '../../components/common/ConfirmDialog'
 import type { EstadoVenta } from '../../types/database'
 
 type VentaRow = {
@@ -49,6 +50,7 @@ export default function VentasPage() {
   const detalleCacheRef = useRef<Map<number, DetalleItem[]>>(new Map())
   const [detalleVersion, setDetalleVersion] = useState(0)
   const [reconciliandoId, setReconciliandoId] = useState<number | null>(null)
+  const [ventaACancelar, setVentaACancelar] = useState<VentaRow | null>(null)
   const deferredSearch = useDeferredValue(search)
 
   const loadVentas = useCallback(async () => {
@@ -138,6 +140,22 @@ export default function VentasPage() {
     }
   }
 
+  // El backend revisa el cobro en Mercado Pago antes de cancelar: si ya se pagó o sigue activo
+  // en la terminal, rechaza la cancelación. Al cancelar regresa el inventario.
+  const cancelarVentaPendiente = async (venta: VentaRow) => {
+    setVentaACancelar(null)
+    setReconciliandoId(venta.id)
+    try {
+      await api.patch(`/ventas/${venta.id}/cancelar`)
+      toast.success(`Venta ${venta.folio} cancelada y su inventario regresado`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'No se pudo cancelar la venta')
+    } finally {
+      setReconciliandoId(null)
+      await loadVentas()
+    }
+  }
+
   useEffect(() => {
     loadVentas()
   }, [loadVentas])
@@ -175,7 +193,7 @@ export default function VentasPage() {
           <p className="text-2xl font-bold text-emerald-700">{totalPagadas}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-100 p-4">
-          <p className="text-xs text-gray-500">Monto total</p>
+          <p className="text-xs text-gray-500">Monto cobrado (pagadas)</p>
           <p className="text-2xl font-bold text-indigo-700">${sumTotal.toFixed(2)}</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-100 p-4">
@@ -299,6 +317,16 @@ export default function VentasPage() {
                                   Verificar pago
                                 </button>
                               )}
+                              {venta.estado === 'PENDIENTE' && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setVentaACancelar(venta) }}
+                                  disabled={reconciliandoId === venta.id}
+                                  className="text-[11px] font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                                >
+                                  Cancelar
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -388,6 +416,17 @@ export default function VentasPage() {
           </>
         )}
       </div>
+
+      {ventaACancelar && (
+        <ConfirmDialog
+          title="¿Cancelar la venta pendiente?"
+          description={`${ventaACancelar.folio} · $${ventaACancelar.total.toFixed(2)} — se verificará en Mercado Pago que no se haya cobrado y se regresará el inventario.`}
+          confirmLabel="Sí, cancelar venta"
+          cancelLabel="No"
+          onConfirm={() => void cancelarVentaPendiente(ventaACancelar)}
+          onCancel={() => setVentaACancelar(null)}
+        />
+      )}
     </div>
   )
 }

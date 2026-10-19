@@ -145,6 +145,12 @@ export function getCajaFromCache(): { id: number; monto_apertura: number; fecha_
   }
 }
 
+// Errores en los que conviene reintentar más tarde: sin red o falla temporal del servidor
+export function isRetryableError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status
+  return isNetworkError(err) || (typeof status === 'number' && status >= 500)
+}
+
 export function isNetworkError(err: unknown): boolean {
   if (!navigator.onLine) return true
   const msg = String((err as { message?: string })?.message ?? '').toLowerCase()
