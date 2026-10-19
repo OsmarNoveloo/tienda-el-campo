@@ -5,6 +5,8 @@ export interface TerminalOrder {
   transactions?: {
     payments?: Array<{ status?: string; status_detail?: string }>
   }
+  // Solo en cobros de crédito: indica si el backend ya registró el abono
+  aplicacion?: { ok: boolean; error?: string; ya_aplicado?: boolean }
 }
 
 export const ESTADOS_ESPERA = ['iniciando', 'created', 'at_terminal']

@@ -3,22 +3,29 @@ import { Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 import { api } from '../../lib/apiClient'
 import { ESTADOS_FALLO, getMotivoFallo, type TerminalOrder } from '../../lib/terminalPago'
 
+export type AbonoTerminal = { credito_id: number } | { cliente_id: number }
+
 interface Props {
   monto: number
   descripcion: string
-  onAprobado: () => Promise<void>
+  abono: AbonoTerminal
+  // Solo recarga la información; el abono lo registra el backend al aprobarse el cobro
+  onAplicado: () => Promise<void>
   onClose: () => void
 }
 
 const POLL_MS = 3000
 
-export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, onClose }: Props) {
+export default function CreditoCobroTerminal({ monto, descripcion, abono, onAplicado, onClose }: Props) {
   const [status, setStatus] = useState('iniciando')
   const [errorMsg, setErrorMsg] = useState('')
   const [cancelando, setCancelando] = useState(false)
+  const [verificando, setVerificando] = useState(false)
   const [intento, setIntento] = useState(0)
   const orderIdRef = useRef<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Evita que dos consultas traslapadas procesen el mismo resultado
+  const consultandoRef = useRef(false)
 
   const stopPolling = () => {
     if (pollTimerRef.current) {
@@ -27,16 +34,26 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
     }
   }
 
-  const aplicar = async () => {
-    setStatus('aplicando')
-    try {
-      await onAprobado()
-      setStatus('aplicado')
-      setTimeout(onClose, 1200)
-    } catch (err) {
-      setStatus('error-aplicar')
-      setErrorMsg((err as Error).message ?? 'No se pudo registrar el abono')
+  // Regresa true cuando la orden llegó a un estado final
+  const procesarOrden = async (data: TerminalOrder): Promise<boolean> => {
+    if (data.status === 'processed') {
+      if (data.aplicacion?.ok) {
+        setStatus('aplicado')
+        await onAplicado().catch(() => undefined)
+        setTimeout(onClose, 1200)
+      } else {
+        setStatus('error-aplicar')
+        setErrorMsg(data.aplicacion?.error ?? 'No se pudo confirmar el registro del abono')
+      }
+      return true
     }
+    if (ESTADOS_FALLO.includes(data.status)) {
+      setErrorMsg(getMotivoFallo(data, data.status))
+      setStatus(data.status)
+      return true
+    }
+    setStatus(data.status)
+    return false
   }
 
   useEffect(() => {
@@ -44,33 +61,22 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
 
     const iniciar = async () => {
       try {
-        const order = await api.post<TerminalOrder>('/mercadopago/pago', {
-          monto,
-          descripcion,
-          referencia: `abono-${Date.now()}`,
-        })
+        const order = await api.post<TerminalOrder>('/mercadopago/pago', { monto, descripcion, abono })
         if (cancelado) return
         orderIdRef.current = order.id
         setStatus(order.status ?? 'created')
 
         pollTimerRef.current = setInterval(async () => {
-          if (!orderIdRef.current) return
+          if (!orderIdRef.current || consultandoRef.current) return
+          consultandoRef.current = true
           try {
             const data = await api.get<TerminalOrder>(`/mercadopago/pago/${orderIdRef.current}`)
             if (cancelado) return
-
-            if (data.status === 'processed') {
-              stopPolling()
-              await aplicar()
-            } else if (ESTADOS_FALLO.includes(data.status)) {
-              stopPolling()
-              setErrorMsg(getMotivoFallo(data, data.status))
-              setStatus(data.status)
-            } else {
-              setStatus(data.status)
-            }
+            if (await procesarOrden(data)) stopPolling()
           } catch {
             // sigue intentando en el próximo ciclo
+          } finally {
+            consultandoRef.current = false
           }
         }, POLL_MS)
       } catch (err) {
@@ -109,9 +115,24 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
     setIntento((n) => n + 1)
   }
 
+  // El cobro ya se hizo: se vuelve a consultar la misma orden para que el backend reintente
+  // registrar el abono. Nunca se cobra de nuevo ni se duplica el abono.
+  const handleVerificarAbono = async () => {
+    if (!orderIdRef.current) return
+    setVerificando(true)
+    try {
+      const data = await api.get<TerminalOrder>(`/mercadopago/pago/${orderIdRef.current}`)
+      await procesarOrden(data)
+    } catch (err) {
+      setErrorMsg((err as Error).message ?? 'No se pudo consultar el cobro')
+    } finally {
+      setVerificando(false)
+    }
+  }
+
   const fallo = status === 'error' || ESTADOS_FALLO.includes(status)
   // Cualquier estado no reconocido se muestra como "esperando" para que el modal nunca quede en blanco
-  const esperando = !fallo && !['aplicando', 'aplicado', 'error-aplicar'].includes(status)
+  const esperando = !fallo && !['aplicado', 'error-aplicar'].includes(status)
 
   return (
     <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
@@ -137,14 +158,6 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
           </>
         )}
 
-        {status === 'aplicando' && (
-          <>
-            <Loader2 className="mx-auto text-indigo-600 animate-spin" size={40} />
-            <h3 className="mt-3 text-base font-semibold text-gray-800">Pago aprobado</h3>
-            <p className="mt-1 text-sm text-gray-500">Registrando el abono...</p>
-          </>
-        )}
-
         {status === 'aplicado' && (
           <>
             <CheckCircle2 className="mx-auto text-emerald-600" size={40} />
@@ -158,7 +171,7 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
             <AlertTriangle className="mx-auto text-amber-500" size={40} />
             <h3 className="mt-3 text-base font-semibold text-gray-800">El cobro sí se realizó</h3>
             <p className="mt-1 text-sm text-gray-500">
-              Pero no se pudo registrar el abono automáticamente: {errorMsg}. Reintenta o regístralo manualmente para no perder el pago.
+              Pero no se pudo registrar el abono: {errorMsg}. Verifica de nuevo; no se vuelve a cobrar ni se duplica el abono.
             </p>
             <div className="mt-5 flex gap-2">
               <button
@@ -170,10 +183,11 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
               </button>
               <button
                 type="button"
-                onClick={() => void aplicar()}
-                className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+                onClick={() => void handleVerificarAbono()}
+                disabled={verificando}
+                className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
               >
-                Reintentar
+                {verificando ? 'Verificando...' : 'Verificar de nuevo'}
               </button>
             </div>
           </>

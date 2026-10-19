@@ -23,7 +23,7 @@ import { toast } from 'react-toastify'
 import { useAuth } from '../../context/AuthContext'
 import { useSystemConfig } from '../../hooks/useSystemConfig'
 import { api } from '../../lib/apiClient'
-import CreditoCobroTerminal from '../../components/creditos/CreditoCobroTerminal'
+import CreditoCobroTerminal, { type AbonoTerminal } from '../../components/creditos/CreditoCobroTerminal'
 import { formatDateTime, formatDate } from '../../lib/dateUtils'
 import { normalizeSearchText } from '../../lib/searchUtils'
 import type { AbonoCredito, CreditoVenta, EstadoCredito } from '../../types/database'
@@ -108,8 +108,7 @@ export default function CreditosPage() {
   const [pagoPendiente, setPagoPendiente] = useState<{
     monto: number
     descripcion: string
-    endpoint: string
-    body: Record<string, unknown>
+    abono: AbonoTerminal
   } | null>(null)
   const deferredSearchTerm = useDeferredValue(searchTerm)
 
@@ -250,6 +249,7 @@ export default function CreditosPage() {
         monto: Number(montoFinal.toFixed(2)),
         descripcion: selectedClienteDeuda.cliente_nombre,
         endpoint: '/creditos/pagar-cliente',
+        abono: { cliente_id: selectedClienteDeuda.cliente_id },
         body: {
           cliente_id: selectedClienteDeuda.cliente_id,
           monto: Number(montoFinal.toFixed(2)),
@@ -271,6 +271,7 @@ export default function CreditosPage() {
       monto: Number(montoFinal.toFixed(2)),
       descripcion: selectedCredito.cliente_nombre,
       endpoint: `/creditos/${selectedCredito.id}/abonos`,
+      abono: { credito_id: selectedCredito.id },
       body: {
         monto: Number(montoFinal.toFixed(2)),
         observacion: values.observacion?.trim() || null,
@@ -298,7 +299,7 @@ export default function CreditosPage() {
     const pago = resolverPago(values)
     if (!pago) return
     setModalOpen(false)
-    setPagoPendiente({ ...pago, body: { ...pago.body, es_tarjeta: true } })
+    setPagoPendiente({ monto: pago.monto, descripcion: pago.descripcion, abono: pago.abono })
   })
 
   const handleCobroTerminalClose = () => {
@@ -864,8 +865,8 @@ export default function CreditosPage() {
         <CreditoCobroTerminal
           monto={pagoPendiente.monto}
           descripcion={pagoPendiente.descripcion}
-          onAprobado={async () => {
-            await api.post(pagoPendiente.endpoint, pagoPendiente.body)
+          abono={pagoPendiente.abono}
+          onAplicado={async () => {
             if (isClienteMode) await Promise.all([loadClientesDeuda(), loadCreditos()])
             else await loadCreditos()
           }}

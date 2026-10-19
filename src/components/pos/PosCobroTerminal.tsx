@@ -22,6 +22,8 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
   const [intento, setIntento] = useState(0)
   const orderIdRef = useRef<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Evita que dos consultas traslapadas procesen el mismo resultado (ej. onSuccess doble)
+  const consultandoRef = useRef(false)
 
   const stopPolling = () => {
     if (pollTimerRef.current) {
@@ -53,7 +55,8 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
         setStatus(order.status ?? 'created')
 
         pollTimerRef.current = setInterval(async () => {
-          if (!orderIdRef.current) return
+          if (!orderIdRef.current || consultandoRef.current) return
+          consultandoRef.current = true
           try {
             const data = await api.get<TerminalOrder>(`/mercadopago/pago/${orderIdRef.current}`)
             if (cancelado) return
@@ -70,6 +73,8 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
             }
           } catch {
             // sigue intentando en el próximo ciclo
+          } finally {
+            consultandoRef.current = false
           }
         }, POLL_MS)
       } catch (err) {
