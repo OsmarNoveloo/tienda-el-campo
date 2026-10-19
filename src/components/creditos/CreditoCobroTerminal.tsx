@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 import { api } from '../../lib/apiClient'
-
-interface TerminalOrder {
-  id: string
-  status: string
-}
+import { ESTADOS_FALLO, getMotivoFallo, type TerminalOrder } from '../../lib/terminalPago'
 
 interface Props {
   monto: number
@@ -15,13 +11,12 @@ interface Props {
 }
 
 const POLL_MS = 3000
-const ESTADOS_ESPERA = ['iniciando', 'created', 'at_terminal']
-const ESTADOS_FALLO = ['canceled', 'expired', 'rejected']
 
 export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, onClose }: Props) {
   const [status, setStatus] = useState('iniciando')
   const [errorMsg, setErrorMsg] = useState('')
   const [cancelando, setCancelando] = useState(false)
+  const [intento, setIntento] = useState(0)
   const orderIdRef = useRef<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -69,6 +64,7 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
               await aplicar()
             } else if (ESTADOS_FALLO.includes(data.status)) {
               stopPolling()
+              setErrorMsg(getMotivoFallo(data, data.status))
               setStatus(data.status)
             } else {
               setStatus(data.status)
@@ -91,7 +87,7 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
       stopPolling()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monto, descripcion])
+  }, [monto, descripcion, intento])
 
   const handleCancelar = async () => {
     setCancelando(true)
@@ -106,8 +102,16 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
     onClose()
   }
 
-  const esperando = ESTADOS_ESPERA.includes(status)
+  const handleReintentar = () => {
+    orderIdRef.current = null
+    setErrorMsg('')
+    setStatus('iniciando')
+    setIntento((n) => n + 1)
+  }
+
   const fallo = status === 'error' || ESTADOS_FALLO.includes(status)
+  // Cualquier estado no reconocido se muestra como "esperando" para que el modal nunca quede en blanco
+  const esperando = !fallo && !['aplicando', 'aplicado', 'error-aplicar'].includes(status)
 
   return (
     <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
@@ -181,16 +185,23 @@ export default function CreditoCobroTerminal({ monto, descripcion, onAprobado, o
             <h3 className="mt-3 text-base font-semibold text-gray-800">
               {status === 'error' ? 'No se pudo iniciar el cobro' : 'El cobro no se completó'}
             </h3>
-            <p className="mt-1 text-sm text-gray-500">
-              {status === 'error' ? errorMsg : 'La orden fue cancelada o expiró en la terminal.'}
-            </p>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-5 w-full py-2.5 rounded-lg bg-gray-800 text-white text-sm font-medium hover:bg-gray-900"
-            >
-              Cerrar
-            </button>
+            <p className="mt-1 text-sm text-gray-500">{errorMsg}</p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 py-2.5 rounded-lg border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                onClick={handleReintentar}
+                className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+              >
+                Reintentar
+              </button>
+            </div>
           </>
         )}
       </div>

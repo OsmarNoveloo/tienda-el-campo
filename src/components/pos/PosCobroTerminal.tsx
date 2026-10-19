@@ -2,11 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { toast } from 'react-toastify'
 import { api } from '../../lib/apiClient'
-
-interface TerminalOrder {
-  id: string
-  status: string
-}
+import { ESTADOS_FALLO, getMotivoFallo, type TerminalOrder } from '../../lib/terminalPago'
 
 interface Props {
   ventaId: number
@@ -17,13 +13,13 @@ interface Props {
 }
 
 const POLL_MS = 3000
-const ESTADOS_ESPERA = ['iniciando', 'created', 'at_terminal']
-const ESTADOS_FALLO = ['canceled', 'expired', 'rejected']
 
 export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onClose }: Props) {
   const [status, setStatus] = useState('iniciando')
   const [errorMsg, setErrorMsg] = useState('')
   const [cancelando, setCancelando] = useState(false)
+  // Cada incremento crea una nueva orden en la terminal para la misma venta (reintento)
+  const [intento, setIntento] = useState(0)
   const orderIdRef = useRef<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -68,8 +64,9 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
               toast.success('Pago con tarjeta aprobado')
               onSuccess()
             } else if (ESTADOS_FALLO.includes(data.status)) {
+              // La venta se queda PENDIENTE para poder reintentar; se cancela solo si el cajero lo decide
               stopPolling()
-              await cancelarVentaPendiente()
+              setErrorMsg(getMotivoFallo(data, data.status))
             }
           } catch {
             // sigue intentando en el próximo ciclo
@@ -79,7 +76,6 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
         if (cancelado) return
         setStatus('error')
         setErrorMsg((err as Error).message ?? 'No se pudo iniciar el cobro en la terminal')
-        await cancelarVentaPendiente()
       }
     }
 
@@ -90,7 +86,7 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
       stopPolling()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ventaId, monto, folio])
+  }, [ventaId, monto, folio, intento])
 
   const handleCancelar = async () => {
     setCancelando(true)
@@ -107,8 +103,23 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
     onClose()
   }
 
-  const esperando = ESTADOS_ESPERA.includes(status)
+  const handleReintentar = () => {
+    orderIdRef.current = null
+    setErrorMsg('')
+    setStatus('iniciando')
+    setIntento((n) => n + 1)
+  }
+
+  const handleCancelarVenta = async () => {
+    setCancelando(true)
+    await cancelarVentaPendiente()
+    toast.info('Cobro cancelado')
+    onClose()
+  }
+
   const fallo = status === 'error' || ESTADOS_FALLO.includes(status)
+  // Cualquier estado no reconocido se muestra como "esperando" para que el modal nunca quede en blanco
+  const esperando = !fallo && status !== 'processed'
 
   return (
     <div className="fixed inset-0 z-60 bg-black/40 flex items-center justify-center p-4">
@@ -148,16 +159,26 @@ export default function PosCobroTerminal({ ventaId, monto, folio, onSuccess, onC
             <h3 className="mt-3 text-base font-semibold text-gray-800">
               {status === 'error' ? 'No se pudo iniciar el cobro' : 'El cobro no se completó'}
             </h3>
-            <p className="mt-1 text-sm text-gray-500">
-              {status === 'error' ? errorMsg : 'La orden fue cancelada o expiró en la terminal.'}
-            </p>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-5 w-full py-2.5 rounded-lg bg-gray-800 text-white text-sm font-medium hover:bg-gray-900"
-            >
-              Cerrar
-            </button>
+            <p className="mt-1 text-sm text-gray-500">{errorMsg}</p>
+            <p className="mt-3 text-2xl font-extrabold text-gray-900">${monto.toFixed(2)}</p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleCancelarVenta()}
+                disabled={cancelando}
+                className="flex-1 py-2.5 rounded-lg border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+              >
+                {cancelando ? 'Cancelando...' : 'Cancelar venta'}
+              </button>
+              <button
+                type="button"
+                onClick={handleReintentar}
+                disabled={cancelando}
+                className="flex-1 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >
+                Reintentar
+              </button>
+            </div>
           </>
         )}
       </div>
