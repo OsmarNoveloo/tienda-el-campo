@@ -15,6 +15,7 @@ type AuthContextValue = {
   isAdmin: boolean
   loading: boolean
   login: (username: string, password: string) => Promise<void>
+  loginPerfil: (perfilId: number, password?: string) => Promise<void>
   logout: () => void
 }
 
@@ -41,13 +42,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => getStoredUser())
   const [loading, setLoading] = useState(false)
 
-  const login = useCallback(async (username: string, password: string) => {
+  const iniciarSesion = useCallback(async (path: string, body: Record<string, unknown>) => {
     setLoading(true)
     try {
-      const { token, user: authUser } = await api.post<{ token: string; user: AuthUser }>(
-        '/auth/login',
-        { usuario: username, password },
-      )
+      const { token, user: authUser } = await api.post<{ token: string; user: AuthUser }>(path, body)
       setToken(token)
       setUser(authUser)
       window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser))
@@ -55,6 +53,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
     }
   }, [])
+
+  const login = useCallback(
+    (username: string, password: string) => iniciarSesion('/auth/login', { usuario: username, password }),
+    [iniciarSesion],
+  )
+
+  // Con contraseña (perfiles que la requieren, como el administrador) o con un toque (empleados)
+  const loginPerfil = useCallback(
+    (perfilId: number, password?: string) =>
+      password
+        ? iniciarSesion('/auth/login', { id: perfilId, password })
+        : iniciarSesion('/auth/perfil-login', { id: perfilId }),
+    [iniciarSesion],
+  )
 
   const logout = useCallback(() => {
     clearToken()
@@ -69,9 +81,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAdmin: roleLooksAdmin(user?.rol_nombre),
       loading,
       login,
+      loginPerfil,
       logout,
     }),
-    [user, loading, login, logout],
+    [user, loading, login, loginPerfil, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
